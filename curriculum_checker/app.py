@@ -38,6 +38,8 @@ from excel_export import (
     units_df,
 )
 from excel_import import read_system_excel
+import manual_schema
+from models import SchemaOverrides
 import gemini_verify
 from gemini_component import gemini_browser
 import grid_tab
@@ -99,8 +101,33 @@ def _save_upload(upload, suffix: str) -> str:
 
 
 @st.cache_data(show_spinner=False, max_entries=8)
-def _analyze_cached(path: str, digest: str):
-    return analyze_pdf(path)
+def _analyze_cached(path: str, digest: str, overrides_json: str = ""):
+    ov = SchemaOverrides.model_validate_json(overrides_json) if overrides_json else None
+    return analyze_pdf(path, ov)
+
+
+def _run_analysis(path: str, name: str, digest: str, ov: SchemaOverrides | None = None) -> None:
+    """Analizi çalıştırır. Yapı tanınamazsa elle yapı formu için durumu saklar; başarılıysa sonucu kaydeder."""
+    with st.status("PDF analiz ediliyor…", expanded=True) as status:
+        st.write("Metin ve yerleşim bilgisi çıkarılıyor, program yapısı keşfediliyor…")
+        try:
+            result = _analyze_cached(path, digest, ov.model_dump_json() if ov is not None and not ov.is_empty() else "")
+        except SchemaError as e:
+            status.update(label="Analiz tamamlanamadı", state="error")
+            st.session_state["schema_fail"] = {"path": path, "name": name, "digest": digest, "error": str(e)}
+            return
+        except Exception as e:  # beklenmeyen hata: ayrıntı gösterilir, uygulama çökmez
+            status.update(label="Analiz tamamlanamadı", state="error")
+            st.error(f"Beklenmeyen bir hata oluştu: {type(e).__name__}: {e}")
+            with st.expander("Hata ayrıntısı (geliştirici için)"):
+                st.code(traceback.format_exc())
+            return
+        status.update(label="Analiz tamamlandı", state="complete", expanded=False)
+    st.session_state.pop("schema_fail", None)
+    st.session_state.update(
+        res=result, pdf_name=name, pdf_digest=digest, pdf_path=path, overrides=ov, cmp=None, xl_name=None, gemini=None, gv_payload=None
+    )
+    st.rerun()
 
 
 @st.cache_data(show_spinner=False, max_entries=8)
@@ -140,26 +167,22 @@ with tab_pdf:
     upload = st.file_uploader("Öğretim programı PDF'si", type=["pdf"], key="pdf_upload")
     if st.button("PDF'yi Analiz Et", type="primary", disabled=upload is None):
         path = _save_upload(upload, ".pdf")
-        digest = os.path.basename(path)
-        with st.status("PDF analiz ediliyor…", expanded=True) as status:
-            st.write("Metin ve yerleşim bilgisi çıkarılıyor, program yapısı keşfediliyor…")
-            try:
-                result = _analyze_cached(path, digest)
-            except SchemaError as e:
-                status.update(label="Analiz tamamlanamadı", state="error")
-                st.error(f"PDF'de öğretim programı yapısı tanınamadı: {e}")
-                result = None
-            except Exception as e:  # beklenmeyen hata: ayrıntı gösterilir, uygulama çökmez
-                status.update(label="Analiz tamamlanamadı", state="error")
-                st.error(f"Beklenmeyen bir hata oluştu: {type(e).__name__}: {e}")
-                with st.expander("Hata ayrıntısı (geliştirici için)"):
-                    st.code(traceback.format_exc())
-                result = None
-            else:
-                status.update(label="Analiz tamamlandı", state="complete", expanded=False)
-        if result is not None:
-            st.session_state.update(res=result, pdf_name=upload.name, pdf_digest=digest, cmp=None, xl_name=None, gemini=None, gv_payload=None)
-            st.rerun()
+        st.session_state.pop("schema_fail", None)
+        _run_analysis(path, upload.name, os.path.basename(path))
+
+    fail = st.session_state.get("schema_fail")
+    if fail is not None:
+        # Otomatik algılama yetmedi: yapı bilgileri elle verilir (her program için kod değiştirmeye gerek kalmaz)
+        st.error(f"**{fail['name']}**: PDF'de öğretim programı yapısı otomatik tanınamadı — {fail['error']}")
+        st.markdown(
+            "Aşağıdaki bilgileri PDF'de **yazdığı gibi** girin; araç bunları PDF'de arayıp başlık ve kod biçimini öğrenir. "
+            "Emin olmadığınız alanı boş bırakın (otomatik algılanır)."
+        )
+        ov = manual_schema.overrides_form("manual_schema_fail", st.session_state.get("fail_overrides"))
+        if ov is not None:
+            st.session_state["fail_overrides"] = ov
+            _run_analysis(fail["path"], fail["name"], fail["digest"], ov)
+            st.rerun()  # buraya yalnızca başarısız analizde gelinir: yeni hata mesajı gösterilir
 
     res = st.session_state.get("res")
     if res is None:
@@ -177,6 +200,20 @@ with tab_pdf:
 
         if not res.schema_.structure_pages:
             st.warning("Program yapısı/tanıtım sayfası bulunamadı; bölüm başlıkları ve kod deseni tema sayfalarından öğrenildi. Sonuçları inceleyin.")
+        s = res.schema_
+        with st.expander(
+            f"Program yapısı: anahtar kelime **{s.unit_keyword}**, ÖÇ kodu **{s.lo_prefix}.{'.'.join('N' if t == 'n' else 'X' for t in s.lo_segment_types)}**, "
+            f"yapı sayfaları **{', '.join(map(str, s.structure_pages)) or 'yok'}**, ilk tema sayfası **{s.data_start_page}**"
+            + (" · elle verildi" if st.session_state.get("overrides") else "")
+            + " — yanlışsa elle düzeltin"
+        ):
+            st.caption("Otomatik algılanan değerler aşağıda. Yanlış olanı düzeltip yeniden analiz edin; boş bıraktığınız alan otomatik algılanır.")
+            ov = manual_schema.overrides_form(
+                "manual_schema_fix", st.session_state.get("overrides") or manual_schema.detected_defaults(res), "Yeniden analiz et"
+            )
+            if ov is not None and st.session_state.get("pdf_path"):
+                _run_analysis(st.session_state["pdf_path"], st.session_state["pdf_name"], st.session_state["pdf_digest"], ov)
+                st.rerun()  # buraya yalnızca başarısız analizde gelinir: elle yapı formu üstte gösterilir
 
         st.subheader("Temalar / üniteler")
         st.dataframe(style_by(units_df(res), "Durum"), hide_index=True, width="stretch")

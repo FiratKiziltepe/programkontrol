@@ -160,6 +160,18 @@ class ProgramSchema(BaseModel):
     data_start_page: int
 
 
+class SchemaOverrides(BaseModel):
+    """Kullanıcının elle verdiği program yapısı bilgileri (otomatik algılama yetmediğinde).
+    Boş alanlar otomatik algılanır. Metinler PDF'de yazdığı gibi girilir; PDF'de aranarak doğrulanır."""
+    unit_title_example: Optional[str] = None  # ör. "1. ÜNİTE: DİN HİZMETLERİ VE İLETİŞİM"
+    lo_code_example: Optional[str] = None  # ör. "HMU.11.1.1."
+    structure_pages: Optional[list[int]] = None  # None: otomatik; []: yapı sayfası yok
+    data_start_page: Optional[int] = None  # ilk tema/ünite sayfası (PDF sayfa numarası)
+
+    def is_empty(self) -> bool:
+        return not (self.unit_title_example or self.lo_code_example or self.structure_pages is not None or self.data_start_page)
+
+
 class ExpectedRow(BaseModel):
     table_index: int
     order: Optional[int]

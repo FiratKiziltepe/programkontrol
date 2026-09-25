@@ -12,7 +12,7 @@ from collections import Counter, defaultdict
 
 import fitz
 
-from models import ExpectedLoListColumn, ExpectedRow, ExpectedTable, LabelDef, ProgramSchema, Span, TableRole, TextField
+from models import ExpectedLoListColumn, ExpectedRow, ExpectedTable, LabelDef, ProgramSchema, SchemaOverrides, Span, TableRole, TextField
 from pdf_extract import (
     UPPER_SEGMENT,
     PdfDoc,
@@ -108,6 +108,8 @@ def learn_labels(doc: PdfDoc, heading: Span | None, sample_title: Span, pages: l
                 continue
             if not any(ch.isalnum() for ch in s.text):
                 continue  # başlık renginde örnek içerik işareti (Afet s.13: "ALAN" yanında "-")
+            if GENERIC_CODE_START_RE.match(s.text):
+                continue  # başlık renginde örnek kod (Din Hizmetleri s.13 "HMU.11.1.1." iki başlık satırının arasında)
             cand.append(s)
     colors = sorted({s.color for s in cand})
     labels: list[LabelDef] = []
@@ -193,12 +195,83 @@ def _color_dist(a: int, b: int) -> int:
     return max(abs(((a >> s) & 255) - ((b >> s) & 255)) for s in (16, 8, 0))
 
 
+def _title_runs(doc: PdfDoc, exclude: frozenset[int] = frozenset()):
+    """Her satırdaki aynı renkli ardışık parçaların birleşimi: (ilk span'ın birleşik metinli kopyası)."""
+    for p in range(1, doc.page_count + 1):
+        spans = [s for s in _content_spans(doc, p) if s.color not in exclude]
+        for r in group_rows(spans):
+            i = 0
+            while i < len(r):
+                j = i + 1
+                while j < len(r) and _color_dist(r[j].color, r[i].color) <= 10:
+                    j += 1
+                yield r[i].model_copy(update={"text": " ".join(x.text.strip() for x in r[i:j])})
+                i = j
+
+
+KW_FIRST_RE = re.compile(r"^\s*([^\W\d_]+(?:[ \t]+[^\W\d_]+){0,2})\s+(\d+)\s*:\s*(\S.*)$", re.S)
+
+
+def keyword_of_example(example: str) -> str:
+    """Örnek başlıktan anahtar kelime ("1. ÜNİTE: …" / "ÜNİTE 1: …" -> "ÜNİTE")."""
+    t = example.replace("\n", " ").strip()
+    m = UNIT_TITLE_RE.match(t)
+    if m:
+        return m.group(2)
+    m = KW_FIRST_RE.match(t)
+    if m:
+        return m.group(1)
+    raise SchemaError(f'Örnek başlık "1. ÜNİTE: Ad" ya da "ÜNİTE 1: Ad" biçiminde olmalı: {example!r}')
+
+
+def find_titles_from_example(doc: PdfDoc, body: frozenset[int], example: str) -> tuple[str, list[Span]]:
+    """Kullanıcının PDF'de yazdığı gibi verdiği örnek başlık PDF'de aranır; aynı renk ve anahtar kelimeyle
+    yazılmış bütün başlıklar toplanır."""
+    keyword = keyword_of_example(example)
+    key = norm_label(example)
+    runs = list(_title_runs(doc))
+    hit = next((s for s in runs if norm_label(s.text) == key), None)
+    if hit is None:
+        # başlık iki satıra bölünmüş olabilir: örnek, PDF'deki ilk satırla başlıyorsa
+        hit = next((s for s in runs if len(norm_label(s.text)) > 8 and key.startswith(norm_label(s.text)) and parse_unit_title(s.text, keyword)), None)
+    if hit is None:
+        raise SchemaError(f"Örnek başlık PDF'de bulunamadı (PDF'de yazdığı gibi girin): {example!r}")
+    if hit.color in body:
+        raise SchemaError("Örnek başlık gövde metniyle aynı renkte; bu biçimdeki başlıklar henüz desteklenmiyor")
+    colors = near_colors(doc, hit.color)
+    titles = [s for s in runs if s.color in colors and parse_unit_title(s.text, keyword)]
+    return keyword, titles
+
+
+def lo_code_from_example(example: str) -> tuple[str, list[str]]:
+    """Örnek ÖÇ kodundan önek ve segment tipleri ("HMU.11.1.1." -> ("HMU", ["n", "n", "n"]))."""
+    pat = re.compile(rf"^\s*([^\W\d_]+)[\s.]*(\d+(?:[\s.]+\d+)+(?:[\s.]+{UPPER_SEGMENT}(?=[.\s]|$))?)")
+    m = pat.match(example or "")
+    if not m:
+        raise SchemaError(f'Örnek öğrenme çıktısı kodu "ÖNEK.9.1.1." biçiminde olmalı: {example!r}')
+    types = ["n" if x.isdigit() else "a" for x in re.findall(r"\d+|[^\W\d_]+", m.group(2))]
+    return m.group(1), types
+
+
 def find_unit_titles(doc: PdfDoc, body: frozenset[int]) -> tuple[str, list[Span]]:
     """Belge genelinde birim başlıkları ("N. TEMA: …", "N. ÜNİTE: …", "N. ÖĞRENME ALANI: …").
 
     Gövde renginde olmayan ve birim başlığı biçimindeki span'lar toplanır; en çok sayfada geçen
     anahtar kelime birim anahtar kelimesidir. Program bazında kelime hardcode edilmez."""
-    cands = [s for s in doc.spans if s.id not in doc.furniture and s.color not in body and UNIT_TITLE_RE.match(s.text)]
+    cands = []
+    for p in range(1, doc.page_count + 1):
+        spans = [s for s in _content_spans(doc, p) if s.color not in body]
+        for r in group_rows(spans):
+            for i, s in enumerate(r):
+                if UNIT_TITLE_RE.match(s.text):
+                    cands.append(s)
+                    continue
+                # aynı satırda aynı renkte parçalara bölünmüş başlık ("1. ÜNİTE: " + "DİN HİZMETLERİ …")
+                same = [x for x in r[i:] if _color_dist(x.color, s.color) <= 10]
+                joined = " ".join(x.text.strip() for x in same)
+                if i == 0 or r[i - 1].color != s.color:
+                    if UNIT_TITLE_RE.match(joined):
+                        cands.append(s.model_copy(update={"text": joined}))
     pages_by_kw: dict[str, set[int]] = defaultdict(set)
     for s in cands:
         pages_by_kw[norm_label(UNIT_TITLE_RE.match(s.text).group(2))].add(s.page)
@@ -402,32 +475,50 @@ def learn_lo_code_from_units(doc: PdfDoc, body: frozenset[int], data_start: int)
     return key[0], list(key[1]), example[key]
 
 
-def detect_schema(doc: PdfDoc) -> ProgramSchema:
+def detect_schema(doc: PdfDoc, overrides: SchemaOverrides | None = None) -> ProgramSchema:
+    """Program yapısını keşfeder. overrides: kullanıcının elle verdiği bilgiler (boş alanlar otomatik)."""
+    ov = overrides or SchemaOverrides()
     dominant = body_color(doc)
     # Gövde kümesi daha geniş tutulur: Fen s.16 açıklamaları #000000/#000C14, gövde #221F1F;
     # s.127'de bileşen içindeki tek kelime "Işığın" #000000. Hepsi siyaha yakın gövde metnidir.
     body = near_colors(doc, dominant, tol=BODY_COLOR_TOL)
-    keyword, titles = find_unit_titles(doc, body)
-    heading, sample, pages = locate_structure(doc, body, titles)
+    if ov.unit_title_example:
+        keyword, titles = find_titles_from_example(doc, body, ov.unit_title_example)
+    else:
+        keyword, titles = find_unit_titles(doc, body)
+    if ov.structure_pages is not None:
+        pages = sorted(set(ov.structure_pages))
+        heading = None
+        sample = next((t for t in titles if t.page in pages), titles[0]) if pages else None
+    else:
+        heading, sample, pages = locate_structure(doc, body, titles)
     title_color = sample.color if sample is not None else Counter(s.color for s in titles).most_common(1)[0][0]
     title_colors = near_colors(doc, title_color)
     after = [t for t in titles if t.color in title_colors and (not pages or t.page > pages[-1])]
+    if ov.data_start_page:
+        after = [t for t in after if t.page >= ov.data_start_page]
     if not after:
         raise SchemaError("Tema/ünite başlığı bulunamadı")
-    data_start = min(t.page for t in after)
+    data_start = ov.data_start_page or min(t.page for t in after)
     if sample is not None:
         # Boyut üst sınırı: yapı başlığı aynı sayfadaysa onun boyutu, değilse gerçek birim başlıklarının boyutu
         own_heading = heading if heading is not None and heading.page in pages else None
         cap = own_heading.size if own_heading is not None else sorted(t.size for t in after)[len(after) // 2]
         label_colors, labels = learn_labels(doc, own_heading, sample, pages, body, cap)
         labels = _labels_used_in_units(doc, labels, body | title_colors, data_start)
-        try:
-            prefix, seg_types, lo_span = learn_lo_code(doc, pages, body)
-        except SchemaError:
-            prefix, seg_types, lo_span = learn_lo_code_from_units(doc, body, data_start)
+        if ov.lo_code_example:
+            prefix, seg_types, lo_span = None, None, None
+        else:
+            try:
+                prefix, seg_types, lo_span = learn_lo_code(doc, pages, body)
+            except SchemaError:
+                prefix, seg_types, lo_span = learn_lo_code_from_units(doc, body, data_start)
     else:
         label_colors, labels = learn_labels_from_units(doc, body, title_colors, after, data_start)
-        prefix, seg_types, lo_span = learn_lo_code_from_units(doc, body, data_start)
+        prefix, seg_types, lo_span = (None, None, None) if ov.lo_code_example else learn_lo_code_from_units(doc, body, data_start)
+    if ov.lo_code_example:
+        prefix, seg_types = lo_code_from_example(ov.lo_code_example)
+        lo_span = None
     label_colors = confirm_label_colors(doc, labels, label_colors, body | title_colors, data_start)
     return ProgramSchema(
         structure_pages=pages,
@@ -442,7 +533,7 @@ def detect_schema(doc: PdfDoc) -> ProgramSchema:
         lo_prefix=prefix,
         lo_segments=len(seg_types),
         lo_segment_types=seg_types,
-        lo_example=make_field([lo_span]),
+        lo_example=make_field([lo_span]) if lo_span is not None else None,
         data_start_page=data_start,
     )
 

@@ -20,6 +20,7 @@ from models import (
     ExtractionResult,
     Finding,
     ProgramSchema,
+    SchemaOverrides,
     SectionKind,
     Severity,
     Status,
@@ -623,11 +624,22 @@ def _worst(findings: list[Finding]) -> Status:
     return {Severity.INFO: Status.PASS, Severity.WARNING: Status.WARNING, Severity.NEEDS_REVIEW: Status.NEEDS_REVIEW, Severity.FAIL: Status.FAIL}[w]
 
 
-def analyze_pdf(path: str) -> ExtractionResult:
+def analyze_pdf(path: str, overrides: SchemaOverrides | None = None) -> ExtractionResult:
+    """overrides: kullanıcının elle verdiği program yapısı bilgileri (boş alanlar otomatik algılanır)."""
     doc = extract_spans(path)
-    schema = detect_schema(doc)
+    schema = detect_schema(doc, overrides)
     tables = parse_expected_tables(doc, schema)
     units, regions, findings = extract_units(doc, schema, [t.title.text for t in tables if t.title])
+    if overrides is not None and not overrides.is_empty():
+        findings.append(
+            _f(
+                Severity.INFO,
+                "MANUAL_SCHEMA",
+                "Program yapısı kullanıcının elle verdiği bilgilerle belirlendi",
+                None,
+                **{k: v for k, v in overrides.model_dump().items() if v not in (None, "")},
+            )
+        )
 
     if not schema.structure_pages:
         findings.append(

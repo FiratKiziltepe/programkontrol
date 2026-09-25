@@ -278,13 +278,20 @@ def extract_units(
         for s in row:
             if s.color in title_colors:
                 if unit is not None and not unit.sections:
+                    if unit.title[-1].page == s.page and abs(unit.title[-1].yc - s.yc) < 3 and not unit.subtitle:
+                        # aynı satırda parçalara bölünmüş başlık (Din Hizmetleri s.14: "1. ÜNİTE: " + "DİN HİZMETLERİ …")
+                        unit.title.append(s)
+                        continue
                     if _continues(unit.title[-1], s) and abs(s.size - unit.title[-1].size) < 0.5:
                         unit.title.append(s)  # birden fazla satıra bölünmüş birim başlığı
                     else:
                         unit.subtitle.append(s)  # başlığın altındaki ek satır (ör. "Alt Temalar: ...")
                     continue
                 close_unit()
-                if _is_unit_title(s.text, schema.unit_keyword):
+                # Başlık aynı satırda birden çok parçaya bölünmüş olabilir: satırdaki bu ve sağındaki başlık renkli
+                # parçaların birleşimi de denenir.
+                row_title = " ".join(x.text.strip() for x in row if x.color in title_colors and x.x0 >= s.x0)
+                if _is_unit_title(s.text, schema.unit_keyword) or _is_unit_title(row_title, schema.unit_keyword):
                     # Bağlam başlığı başka renkte olabilir (ör. Biyoloji "10. SINIF"): birim başlığının
                     # hemen üstünde, arada içerik olmadan duran ve bir özet tablosu başlığının başıyla
                     # eşleşen tema dışı başlık bağlam sayılır ("10. SINIF" ~ "10. SINIF BİYOLOJİ DERSİ").
