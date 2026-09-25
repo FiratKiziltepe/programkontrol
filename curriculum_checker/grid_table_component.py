@@ -10,7 +10,7 @@ import streamlit as st
 HTML = """
 <div class="gx">
   <div class="gx-toolbar">
-    <div class="gx-seg" role="tablist"></div>
+    <div class="gx-seg"></div>
     <input class="gx-search" type="search" placeholder="Ara: öğrenme çıktısı kodu, tema veya metin…" aria-label="Ara">
     <label class="gx-check"><input type="checkbox" class="gx-fmt" checked> Biçim farklarını eşleşme say</label>
   </div>
@@ -52,10 +52,22 @@ CSS = """
   --diff: rgba(229, 72, 77, .13); --diffb: rgba(229, 72, 77, .55); --only: rgba(245, 166, 35, .16); --onlyb: rgba(245, 166, 35, .6);
   --fmt: rgba(64, 132, 214, .12); --ok: rgba(46, 160, 67, .10); }
 .gx-toolbar { display: flex; gap: .5rem; flex-wrap: wrap; align-items: center; margin-bottom: .5rem; }
-.gx-seg { display: flex; flex-wrap: wrap; gap: .25rem; }
-.gx-seg button { border: 1px solid var(--bd); background: var(--bg); color: inherit; border-radius: 999px; padding: .3rem .75rem; cursor: pointer; font: inherit; }
-.gx-seg button[aria-selected="true"] { background: var(--st-primary-color); border-color: var(--st-primary-color); color: #fff; }
-.gx-seg .ct { opacity: .75; margin-left: .25rem; font-variant-numeric: tabular-nums; }
+.gx-seg { display: flex; flex-direction: column; gap: .4rem; flex: 1 1 100%; }
+.gx-seg .fg { display: flex; flex-wrap: wrap; gap: .3rem; align-items: center; }
+.gx-seg .fl { font-size: 12px; font-weight: 600; opacity: .7; min-width: 3rem; }
+.gx-seg .chip { border: 1px solid var(--bd); background: var(--bg); color: inherit; border-radius: 999px; padding: .25rem .7rem; cursor: pointer; font: inherit; }
+.gx-seg .chip[aria-pressed="true"] { background: var(--st-primary-color); border-color: var(--st-primary-color); color: #fff; }
+.gx-seg .chip.c-FARKLI[aria-pressed="true"] { background: #cf222e; border-color: #cf222e; }
+.gx-seg .chip.c-YALNIZCA_SİSTEM[aria-pressed="true"], .gx-seg .chip.c-YALNIZCA_PDF[aria-pressed="true"] { background: #bf8700; border-color: #bf8700; }
+.gx-seg .chip.c-BİÇİM[aria-pressed="true"] { background: #0969da; border-color: #0969da; }
+.gx-seg .chip.c-AYNI[aria-pressed="true"] { background: #1a7f37; border-color: #1a7f37; }
+.gx-seg .chip.c-BOŞ[aria-pressed="true"] { background: #6e7781; border-color: #6e7781; }
+.gx-seg .ct { opacity: .8; margin-left: .35rem; font-variant-numeric: tabular-nums; }
+.gx-seg .quick { display: inline-flex; gap: .25rem; margin-left: .5rem; }
+.gx-seg .mini { border: 0; background: none; color: var(--st-primary-color); cursor: pointer; font: inherit; font-size: 12px; text-decoration: underline; padding: 0 .2rem; }
+.gx-seg details.fields { margin-left: .25rem; }
+.gx-seg details.fields summary { cursor: pointer; font-size: 12px; opacity: .85; }
+.gx-seg details.fields .fg { margin-top: .35rem; }
 .gx-search { flex: 1 1 14rem; min-width: 10rem; padding: .4rem .6rem; border: 1px solid var(--bd); border-radius: .5rem; background: var(--bg2); color: inherit; font: inherit; }
 .gx-check { display: inline-flex; gap: .35rem; align-items: center; white-space: nowrap; cursor: pointer; }
 .gx-cols { margin: .25rem 0 .5rem; }
@@ -158,7 +170,7 @@ export default function (component) {
   const { data, parentElement } = component;
   const root = parentElement.querySelector(".gx");
   const D = data || { headers: [], rows: [] };
-  const S = root.__gx || (root.__gx = { filter: "diff", q: "", fmt: true, hidden: new Set(), page: 0, open: -1, onlyDiff: false });
+  const S = root.__gx || (root.__gx = { sel: new Set(DIFF), flags: new Set(), fields: new Set(), q: "", fmt: true, hidden: new Set(), page: 0, open: -1, onlyDiff: false });
   const headers = D.headers || [];
   const levels = D.levels || {};
 
@@ -175,17 +187,17 @@ export default function (component) {
     for (const s of ["FARKLI", "YALNIZCA_SİSTEM", "YALNIZCA_PDF", "BİÇİM", "AYNI"]) if (sts.has(s)) return s;
     return "BOŞ";
   };
-  const rowFlags = (r) => {
-    const cs = Object.values(cellsOf(r, false));
-    return { completed: cs.some((c) => c.src !== "çıkarım"), unverified: cs.some((c) => c.g) };
-  };
-  const FILTERS = [
-    ["all", "Tümü", () => true],
-    ["diff", "Farklar", (r) => DIFF.has(rowStatus(r))],
-    ["same", "Eşleşenler", (r) => !DIFF.has(rowStatus(r))],
-    ["done", "Tamamlananlar", (r) => rowFlags(r).completed],
-    ["gq", "Gemini doğrulanamadı", (r) => rowFlags(r).unverified],
+  // Çoklu seçimli filtre: satır, seçili durumlardan en az birine sahip bir hücre içeriyorsa gösterilir.
+  // Alan filtresi seçiliyse yalnızca o alanların hücrelerine bakılır; ek filtreler (tamamlanan, Gemini?) VE ile uygulanır.
+  const STATUS_ORDER = ["FARKLI", "YALNIZCA_SİSTEM", "YALNIZCA_PDF", "BİÇİM", "AYNI", "BOŞ"];
+  const FLAGS = [
+    ["done", "Tamamlananlar", (c) => c.src !== "çıkarım"],
+    ["gq", "Gemini doğrulanamadı", (c) => !!c.g],
   ];
+  const fieldCells = (r) => Object.entries(cellsOf(r, false)).filter(([h]) => !S.fields.size || S.fields.has(h)).map(([, c]) => c);
+  const rowHas = (r, st) => fieldCells(r).some((c) => eff(c.st) === st);
+  const flagOk = (r) => [...S.flags].every((k) => fieldCells(r).some(FLAGS.find((f) => f[0] === k)[2]));
+  const statusOk = (r) => S.sel.size === 0 || fieldCells(r).some((c) => S.sel.has(eff(c.st)));
 
   function matches(r) {
     if (!S.q) return true;
@@ -193,15 +205,32 @@ export default function (component) {
     if ((r.lo + " " + r.tl + " " + r.c).toLocaleLowerCase("tr").includes(q)) return true;
     return Object.values(cellsOf(r, false)).some((c) => (c.s + " " + c.p).toLocaleLowerCase("tr").includes(q));
   }
-  const visibleRows = () => {
-    const f = FILTERS.find((x) => x[0] === S.filter)[2];
-    return (D.rows || []).filter((r) => f(r) && matches(r));
-  };
+  const visibleRows = () => (D.rows || []).filter((r) => statusOk(r) && flagOk(r) && matches(r));
 
-  // araç çubuğu
+  // araç çubuğu: filtre çipleri
   const seg = root.querySelector(".gx-seg");
-  seg.innerHTML = FILTERS.map(([k, t, f]) => `<button type="button" data-f="${k}" aria-selected="${S.filter === k}">${t}<span class="ct">${(D.rows || []).filter(f).length}</span></button>`).join("");
-  seg.querySelectorAll("button").forEach((b) => (b.onclick = () => { S.filter = b.dataset.f; S.page = 0; render(); }));
+  function renderFilters() {
+    const rows = D.rows || [];
+    const statuses = STATUS_ORDER.filter((s) => !(S.fmt && s === "BİÇİM"));
+    const chip = (kind, key, label, n, extra = "") =>
+      `<button type="button" class="chip ${extra}" data-k="${kind}" data-v="${esc(key)}" aria-pressed="${kind === "s" ? S.sel.has(key) : kind === "f" ? S.flags.has(key) : S.fields.has(key)}">${esc(label)}${n === null ? "" : `<span class="ct">${n}</span>`}</button>`;
+    seg.innerHTML =
+      `<div class="fg"><span class="fl">Durum</span>` +
+      statuses.map((s) => chip("s", s, LABEL[s], rows.filter((r) => rowHas(r, s)).length, `c-${s}`)).join("") +
+      `<span class="quick"><button type="button" class="mini" data-q="diff">Farklar</button><button type="button" class="mini" data-q="all">Tümü</button><button type="button" class="mini" data-q="none">Temizle</button></span></div>` +
+      `<div class="fg"><span class="fl">Ek</span>` + FLAGS.map(([k, t, f]) => chip("f", k, t, rows.filter((r) => fieldCells(r).some(f)).length)).join("") +
+      `<details class="fields"${S.fields.size ? " open" : ""}><summary>Alan filtresi${S.fields.size ? ` (${S.fields.size} seçili)` : " (tüm alanlar)"}</summary><div class="fg">` +
+      headers.map((h) => chip("h", h, h, null)).join("") + `</div></details></div>`;
+    seg.querySelectorAll("button.chip").forEach((b) => (b.onclick = () => {
+      const set = b.dataset.k === "s" ? S.sel : b.dataset.k === "f" ? S.flags : S.fields;
+      set.has(b.dataset.v) ? set.delete(b.dataset.v) : set.add(b.dataset.v);
+      S.page = 0; render();
+    }));
+    seg.querySelectorAll("button.mini").forEach((b) => (b.onclick = () => {
+      S.sel = b.dataset.q === "diff" ? new Set(DIFF) : b.dataset.q === "all" ? new Set(STATUS_ORDER) : new Set();
+      S.page = 0; render();
+    }));
+  }
   const search = root.querySelector(".gx-search");
   search.value = S.q;
   search.oninput = () => { S.q = search.value.trim(); S.page = 0; render(false); };
@@ -260,7 +289,7 @@ export default function (component) {
     pager.innerHTML = `<span>${rows.length} satır · sayfa ${S.page + 1}/${pages}</span><button type="button" class="pp" ${S.page === 0 ? "disabled" : ""}>‹ Önceki</button><button type="button" class="pn" ${S.page >= pages - 1 ? "disabled" : ""}>Sonraki ›</button>`;
     pager.querySelector(".pp").onclick = () => { S.page--; render(false); };
     pager.querySelector(".pn").onclick = () => { S.page++; render(false); };
-    if (rebuildHead) seg.querySelectorAll("button").forEach((b) => b.setAttribute("aria-selected", String(b.dataset.f === S.filter)));
+    renderFilters();
     // Uzun alan başlıkları satır kaydırabilir: ikinci başlık satırı, birincinin gerçek yüksekliğinin altına yapışır
     requestAnimationFrame(() => {
       const r1 = table.querySelector("thead tr:first-child");
