@@ -159,3 +159,40 @@ def code_items(cell: Cell) -> list[tuple[str, str, str]]:
 def list_items(cell: Cell) -> list[str]:
     """Kodsuz liste hücresi (ör. Disiplinler Arası İlişkiler): satır başına bir öğe."""
     return [x.strip() for x in cell.text.split("\n") if x.strip()]
+
+
+# ---------------------------------------------------------------- birden çok Excel
+
+
+def _tag_cells(theme: ExcelTheme, tag: str) -> None:
+    """Birden çok dosyada hücre adresine dosya adı eklenir ("5.sinif.xlsx!A2"); değerler değişmez."""
+    cells = [theme.cell, *theme.columns.values()]
+    for lo in theme.los:
+        cells += [lo.cell, *lo.components, *lo.columns.values()]
+    for c in cells:
+        c.address = f"{tag}!{c.address}"
+
+
+def merge_system_excels(parts: list[tuple[str, SystemExcel]]) -> SystemExcel:
+    """Sınıf sınıf indirilen sistem Excel'lerini tek listede birleştirir: [(dosya adı, SystemExcel)].
+    Temalar dosya sırasıyla eklenir. Sütun düzeyleri birleştirilir; bir sütun dosyalarda farklı düzeyde ise
+    ilk dosyadaki geçerlidir. Tek dosyada hiçbir şey değişmez."""
+    if len(parts) == 1:
+        return parts[0][1]
+    first = parts[0][1]
+    headers = list(first.headers)
+    level = dict(first.column_level)
+    themes: list[ExcelTheme] = []
+    for name, x in parts:
+        for h in x.headers:
+            if h not in headers:
+                headers.append(h)
+        for h, lv in x.column_level.items():
+            if level.get(h) in (None, "empty"):
+                level[h] = lv
+        for t in x.themes:
+            _tag_cells(t, name)
+            themes.append(t)
+    return SystemExcel(
+        " + ".join(n for n, _ in parts), first.sheet, headers, first.theme_col, first.lo_col, first.component_col, level, themes
+    )

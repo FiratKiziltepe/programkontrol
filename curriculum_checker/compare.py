@@ -26,7 +26,8 @@ KOD_FARKLI = "KOD_FARKLI"
 METIN_FARKLI = "METİN_FARKLI"
 SAYI_FARKLI = "SAYI_FARKLI"
 INCELEME = "İNCELEME_GEREKLİ"
-STATUSES = [AYNI, BICIM, PDF_VAR, EXCEL_VAR, YANLIS_BOLUM, KOD_FARKLI, METIN_FARKLI, SAYI_FARKLI, INCELEME]
+KAPSAM_DISI = "KAPSAM_DIŞI"  # kullanıcının seçtiği karşılaştırma kapsamı dışındaki tema (fark sayılmaz)
+STATUSES = [AYNI, BICIM, PDF_VAR, EXCEL_VAR, YANLIS_BOLUM, KOD_FARKLI, METIN_FARKLI, SAYI_FARKLI, INCELEME, KAPSAM_DISI]
 
 # Sistem Excel'inde "yok" anlamında kullanılan hücre değerleri (kod listesinde öğe sayılmaz)
 EMPTY_MARKERS = {"yok", "-"}
@@ -100,8 +101,9 @@ def _unit_name(u: Unit) -> str:
 
 
 class Comparer:
-    def __init__(self, res: ExtractionResult, xl: SystemExcel):
-        self.res, self.xl = res, xl
+    def __init__(self, res: ExtractionResult, xl: SystemExcel, scope: set[str] | None = None):
+        """scope: karşılaştırılacak PDF tema kimlikleri (None: tamamı)."""
+        self.res, self.xl, self.scope = res, xl, scope
         s = res.schema_
         self.lo_re = lo_code_regex(s.lo_prefix, s.lo_segment_types)
         self.loose_re = loose_lo_code_regex(s.lo_prefix, s.lo_segments)
@@ -152,9 +154,15 @@ class Comparer:
             if u.id in used_units:
                 self.add(INCELEME, u, "", "Tema", "", u.title.text, t.cell.raw, t.cell, _pages(u.title), "Aynı PDF birimine birden fazla Excel teması eşleşti")
             used_units.add(u.id)
+            if self.scope is not None and u.id not in self.scope:
+                self.add(KAPSAM_DISI, u, "", "Tema", "", u.title.text, t.cell.raw, t.cell, _pages(u.title), "Karşılaştırma kapsamı dışında bırakıldı")
+                continue
             self.compare_theme(t, u)
         for u in self.res.units:
             if u.id not in used_units:
+                if self.scope is not None and u.id not in self.scope:
+                    self.add(KAPSAM_DISI, u, "", "Tema", "", u.title.text, "", None, _pages(u.title), "Karşılaştırma kapsamı dışında (Excel'de yok)")
+                    continue
                 self.add(PDF_VAR, u, "", "Tema", "", u.title.text, "", None, _pages(u.title), "PDF'deki tema Excel'de yok")
         df = pd.DataFrame([asdict(r) for r in self.rows]).rename(columns=COLUMNS)
         if df.empty:
@@ -381,8 +389,8 @@ class Comparer:
         return None
 
 
-def compare(res: ExtractionResult, xl: SystemExcel) -> pd.DataFrame:
-    return Comparer(res, xl).run()
+def compare(res: ExtractionResult, xl: SystemExcel, scope: set[str] | None = None) -> pd.DataFrame:
+    return Comparer(res, xl, scope).run()
 
 
 def summary(df: pd.DataFrame) -> pd.DataFrame:

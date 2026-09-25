@@ -135,6 +135,16 @@ def python_report(grid: Grid, pdf_name: str, xl_name: str) -> str:
     ]
     if grid.notes:
         L += ["Notlar:", ""] + [f"- {n}" for n in grid.notes] + [""]
+    if grid.out_of_scope:
+        L += [
+            f"Karşılaştırma kapsamı dışında bırakılan PDF temaları (fark sayılmadı): **{len(grid.out_of_scope)}**",
+            "",
+        ]
+        L += [
+            f"- {o['tema']} (s.{o['sayfalar']})" + (" — sistem Excel'inde var" if o["excelde"] else "")
+            for o in grid.out_of_scope
+        ]
+        L.append("")
     by_field: dict[str, int] = {}
     for it in items:
         by_field[it["alan"]] = by_field.get(it["alan"], 0) + 1

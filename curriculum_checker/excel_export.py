@@ -52,6 +52,7 @@ STATUS_COLORS = {
     "NEEDS_REVIEW": "FFEB9C",
     "PASS": "C6EFCE",
     "INFO": "EDEDED",  # yalnızca bilgi (ör. süre tablosu bulunamadı)
+    "KAPSAM_DIŞI": "EDEDED",  # karşılaştırma kapsamı dışında (fark değil)
     "YANLIŞ_BÖLÜM": "D9C3E9",
 }
 RED = "FFC7CE"

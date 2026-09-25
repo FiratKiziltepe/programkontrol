@@ -2,17 +2,15 @@
 inceleme raporu. Diğer sekmelerden bağımsızdır (kendi Excel yüklemesi ve oturum anahtarları vardır)."""
 from __future__ import annotations
 
-import hashlib
 import json
 import os
-import tempfile
 
 import streamlit as st
 
 import gemini_verify
 import grid_compare as gc
 import review_report as rr
-from excel_import import read_system_excel
+import scope_panel
 from gemini_tasks_component import gemini_tasks
 from grid_table_component import grid_table
 from pdf_extract import extract_spans
@@ -48,24 +46,18 @@ def render(res, pdf_name: str, pdf_digest: str) -> None:
             del st.session_state[k]
         st.session_state[K + "pdf"] = pdf_digest
 
-    up = st.file_uploader("Müfredat sisteminden indirilen Excel", type=["xlsx"], key=K + "upload")
-    if st.button("Karşılaştırma tablosunu oluştur", type="primary", disabled=up is None, key=K + "build"):
-        data = up.getvalue()
-        path = os.path.join(tempfile.gettempdir(), f"curriculum_grid_{hashlib.sha1(data).hexdigest()[:12]}.xlsx")
-        with open(path, "wb") as f:
-            f.write(data)
-        try:
-            with st.spinner("Tablo oluşturuluyor, eksik hücreler PDF metin katmanında aranıyor…"):
-                xl = read_system_excel(path)
-                grid = gc.build_grid(res, xl)
-                n = gc.complete_from_text_layer(grid, _doc(res.source), res.schema_.label_colors)
-        except ValueError as e:
-            st.error(f"Excel okunamadı: {e}")
-        else:
-            for k in [k for k in st.session_state if k.startswith(K) and k not in (K + "pdf", K + "upload", K + "build")]:
-                del st.session_state[k]
-            st.session_state.update({K + "grid": grid, K + "xl_name": up.name, K + "text_layer": n})
-            _bump()
+    # Birden çok Excel (sınıf sınıf) yüklenebilir; karşılaştırma kapsamı panelde belirlenir (4. sekmeyle ortak)
+    xl, xl_names, xl_key = scope_panel.upload_system_excels(K + "upload")
+    grid_scope = scope_panel.scope_panel(res, xl, pdf_digest, xl_key, "tab6") if xl is not None else None
+    if st.button("Karşılaştırma tablosunu oluştur", type="primary", disabled=xl is None, key=K + "build"):
+        with st.spinner("Tablo oluşturuluyor, eksik hücreler PDF metin katmanında aranıyor…"):
+            grid = gc.build_grid(res, xl, grid_scope)
+            n = gc.complete_from_text_layer(grid, _doc(res.source), res.schema_.label_colors)
+        keep = (K + "pdf", K + "upload", K + "build")
+        for k in [k for k in st.session_state if k.startswith(K) and k not in keep]:
+            del st.session_state[k]
+        st.session_state.update({K + "grid": grid, K + "xl_name": xl_names, K + "text_layer": n})
+        _bump()
 
     grid = st.session_state.get(K + "grid")
     if grid is None:
@@ -87,6 +79,8 @@ def render(res, pdf_name: str, pdf_digest: str) -> None:
     )
     for n in grid.notes:
         st.warning(n)
+    if grid.out_of_scope:
+        st.caption(f"Kapsam dışı bırakılan {len(grid.out_of_scope)} PDF teması tabloda yok ve fark sayılmadı (raporda listelenir).")
 
     ver = st.session_state.get(K + "ver", 0)
     if st.session_state.get(K + "payload_ver") != ver:

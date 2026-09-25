@@ -25,7 +25,7 @@ import fitz
 import pandas as pd
 import streamlit as st
 
-from compare import AYNI, BICIM, STATUSES, compare, summary
+from compare import AYNI, BICIM, KAPSAM_DISI, STATUSES, compare, summary
 from excel_export import (
     RED,
     STATUS_COLORS,
@@ -37,8 +37,8 @@ from excel_export import (
     sections_df,
     units_df,
 )
-from excel_import import read_system_excel
 import manual_schema
+import scope_panel
 from models import SchemaOverrides
 import gemini_verify
 from gemini_component import gemini_browser
@@ -62,6 +62,7 @@ CMP_TR = {
     "METİN_FARKLI": "Metin farklı",
     "SAYI_FARKLI": "Sayı farklı",
     "İNCELEME_GEREKLİ": "İnceleme gerekli",
+    "KAPSAM_DIŞI": "Kapsam dışı",
 }
 TEXT_COLS = {"Metin", "ÖÇ başlığı", "Bileşen metni", "PDF değeri", "Excel değeri", "Açıklama", "Ayrıntı"}
 
@@ -381,18 +382,14 @@ with tab_cmp:
     if res is None:
         st.info("Önce **1. PDF Analizi** sekmesinde bir PDF analiz edin.")
     else:
-        xl_upload = st.file_uploader("Müfredat sisteminden indirilen Excel", type=["xlsx"], key="xl_upload")
-        if st.button("Karşılaştır", type="primary", disabled=xl_upload is None):
-            path = _save_upload(xl_upload, ".xlsx")
-            try:
-                with st.spinner("Karşılaştırılıyor…"):
-                    xl = read_system_excel(path)
-                    cmp_df = compare(res, xl)
-            except ValueError as e:
-                st.error(f"Excel okunamadı: {e}")
-            else:
-                st.session_state.update(cmp=cmp_df, xl_name=xl_upload.name)
-                st.rerun()
+        # Birden çok Excel (sınıf sınıf) yüklenebilir; karşılaştırma kapsamı panelde belirlenir (6. sekmeyle ortak)
+        xl, xl_names, xl_key = scope_panel.upload_system_excels("xl_upload")
+        cmp_scope = scope_panel.scope_panel(res, xl, st.session_state["pdf_digest"], xl_key, "tab4") if xl is not None else None
+        if st.button("Karşılaştır", type="primary", disabled=xl is None):
+            with st.spinner("Karşılaştırılıyor…"):
+                cmp_df = compare(res, xl, cmp_scope)
+            st.session_state.update(cmp=cmp_df, xl_name=xl_names)
+            st.rerun()
 
         cmp_df = st.session_state.get("cmp")
         if cmp_df is not None:
@@ -402,7 +399,7 @@ with tab_cmp:
                 for c, s in zip(st.columns(5), chunk):
                     c.metric(CMP_TR[s], int(counts.get(s, 0)))
 
-            default = [s for s in STATUSES if s not in (AYNI, BICIM)]
+            default = [s for s in STATUSES if s not in (AYNI, BICIM, KAPSAM_DISI)]
             durum_sel = st.multiselect("Durum", STATUSES, default=default, format_func=CMP_TR.get)
             g2, g3 = st.columns(2)
             alan_sel = g2.multiselect("Alan / sütun", sorted(cmp_df["Alan / sütun"].unique()))

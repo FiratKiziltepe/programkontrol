@@ -235,6 +235,7 @@ class Grid:
     units_pages: dict[int, list[int]]  # tema id -> PDF birim sayfaları
     notes: list[str] = field(default_factory=list)
     theme_side: dict[int, str] = field(default_factory=dict)  # "both" | "pdf" | "sys"
+    out_of_scope: list[dict] = field(default_factory=list)  # kapsam dışı PDF temaları: {"tema", "sayfalar", "excelde"}
     lo_side: dict[int, str] = field(default_factory=dict)
 
     def cells_of_row(self, r: GridRow, all_levels: bool = False) -> dict[str, GridCell]:
@@ -292,7 +293,9 @@ def _sys(cell: Cell | None) -> tuple[str, str]:
 # ---------------------------------------------------------------- ızgara kurulumu
 
 
-def build_grid(res: ExtractionResult, xl: SystemExcel) -> Grid:
+def build_grid(res: ExtractionResult, xl: SystemExcel, scope: set[str] | None = None) -> Grid:
+    """scope: karşılaştırılacak PDF tema kimlikleri (None: tamamı). Kapsam dışı temalar satır olmaz,
+    grid.out_of_scope listesinde bildirilir (fark sayılmaz)."""
     cmp = Comparer(res, xl)
     matched = cmp.match_units()
     headers = [h for h in SYSTEM_HEADERS if h in xl.headers] or list(SYSTEM_HEADERS)
@@ -379,13 +382,26 @@ def build_grid(res: ExtractionResult, xl: SystemExcel) -> Grid:
             u = None
         if u is not None:
             used_units.add(u.id)
+            if scope is not None and u.id not in scope:
+                grid.out_of_scope.append(_oos(u, True))
+                continue
         add_rows(tid, u, t)
         tid += 1
     for u in res.units:
         if u.id not in used_units:
+            if scope is not None and u.id not in scope:
+                grid.out_of_scope.append(_oos(u, False))
+                continue
             add_rows(tid, u, None)
             tid += 1
     return grid
+
+
+def _oos(u: Unit, in_excel: bool) -> dict:
+    label = u.title.text.replace("\n", " ")
+    if u.context:
+        label = f"{u.context.text} | {label}"
+    return {"tema": label, "sayfalar": f"{u.pages[0]}-{u.pages[-1]}", "excelde": in_excel}
 
 
 def _looks_like_items(sys_v: str, pdf_v: str) -> bool:
