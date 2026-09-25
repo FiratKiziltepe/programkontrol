@@ -28,7 +28,7 @@ from models import (
     Unit,
     UnitReport,
 )
-from pdf_extract import PdfDoc, context_in_title, extract_spans, lo_code_regex, norm_label, parse_code
+from pdf_extract import PdfDoc, context_in_title, extract_spans, lo_code_regex, make_field, norm_label, parse_code
 from schema_detect import NUMBERED_NAME_RE, detect_schema, label_lookup, parse_expected_tables
 from unit_extract import extract_units
 
@@ -40,6 +40,45 @@ def _f(sev: Severity, check: str, msg: str, unit: Unit | None = None, **details)
 
 
 # ---------------------------------------------------------------- beklenen değer eşleştirme
+
+
+_ROW_CODE_PREFIX_RE = re.compile(r"^\s*[^\W\d_]+[ \t]*\.[ \t]*\d+(?:[ \t]*\.[ \t]*\d+)*[ \t]*\.?\s*")
+
+
+def _row_name_key(row: ExpectedRow) -> str | None:
+    """Özet tablosu satır adının eşleştirme anahtarı: baştaki sıra ("1.") veya kod ("MAT.1.3.") atılır."""
+    if row.name is None:
+        return None
+    t = row.name.text
+    if m := NUMBERED_NAME_RE.match(t):
+        t = m.group(2)
+    t = _ROW_CODE_PREFIX_RE.sub("", t, count=1)
+    return norm_label(t) or None
+
+
+def merge_title_continuations(units: list[Unit], tables: list[ExpectedTable], doc: PdfDoc, schema: ProgramSchema) -> None:
+    """Birim başlığının altındaki satır, başlığın devamı mı yoksa alt başlık mı?
+
+    Geometri tek başına ayırt edemez (Matematik s.156 "7. TEMA: OLAYLARIN OLASILIĞI VE" / "VERİYE DAYALI
+    ARAŞTIRMA" ile Adigece s.83 "2. TEMA: OKULUM" / "Alt Temalar: …" aynı boyut ve renkte, satırları
+    hafifçe üst üste). PDF'in kendi özet tablosu karar verir: başlık adı + alt satır bir tablo satırının
+    adıyla birebir eşleşiyor ve başlık adı tek başına eşleşmiyorsa alt satır başlığın devamıdır."""
+    from schema_detect import parse_unit_title
+
+    row_keys = {k for t in tables if t.role == TableRole.SUMMARY for r in t.rows if (k := _row_name_key(r))}
+    if not row_keys:
+        return
+    by_id = {sp.id: sp for sp in doc.spans}
+    for u in units:
+        if u.subtitle is None or u.name is None or norm_label(u.name) in row_keys:
+            continue
+        if norm_label(u.name + " " + u.subtitle.text) not in row_keys:
+            continue
+        title = make_field([by_id[i] for i in u.title.source_spans + u.subtitle.source_spans])
+        parsed = parse_unit_title(title.text, schema.unit_keyword)
+        if parsed is None:
+            continue
+        u.title, u.subtitle, u.name = title, None, parsed[1]
 
 
 def match_expected(units: list[Unit], tables: list[ExpectedTable]) -> tuple[dict[str, ExpectedRow], list[Finding]]:
@@ -54,27 +93,35 @@ def match_expected(units: list[Unit], tables: list[ExpectedTable]) -> tuple[dict
             cands = tables
         if len(cands) != 1:
             findings.append(
-                _f(Severity.NEEDS_REVIEW, "EXPECTED_TABLE_AMBIGUOUS", "Birim için özet tablosu tekil olarak eşleşmedi", u, candidates=len(cands))
+                _f(Severity.INFO, "EXPECTED_TABLE_AMBIGUOUS", "Birim için özet tablosu tekil olarak eşleşmedi", u, candidates=len(cands))
             )
             continue
         t = cands[0]
-        rows = [r for r in t.rows if r.order is not None and r.order == u.order]
+        # Satır önce adla eşleştirilir: tablo "işleniş sırası"na göre dizilmiş olabilir ve sıra
+        # tema numarasıyla aynı olmayabilir (Matematik s.10: 1. sıra "MAT.1.3. Nesnelerin Geometrisi (1)"
+        # = "5. TEMA: NESNELERİN GEOMETRİSİ (1)"). Ad tekil eşleşmezse sıra numarasıyla eşleştirilir.
+        rows = [r for r in t.rows if r.order is not None and u.name is not None and _row_name_key(r) == norm_label(u.name)]
         if len(rows) != 1:
-            findings.append(_f(Severity.NEEDS_REVIEW, "EXPECTED_ROW_AMBIGUOUS", "Birim için özet tablosu satırı tekil olarak eşleşmedi", u, table_page=t.page))
+            rows = [r for r in t.rows if r.order is not None and r.order == u.order]
+        if len(rows) != 1:
+            findings.append(_f(Severity.INFO, "EXPECTED_ROW_AMBIGUOUS", "Birim için özet tablosu satırı tekil olarak eşleşmedi", u, table_page=t.page))
             continue
         row = rows[0]
-        row_name = row.name.text if row.name is not None else None
-        if row_name is not None and (m := NUMBERED_NAME_RE.match(row_name)) and int(m.group(1)) == row.order:
-            row_name = m.group(2)  # sıra numarası ad hücresinin içinde
-        if row_name is not None and u.name is not None and norm_label(row_name) != norm_label(u.name):
+        row_key = _row_name_key(row)  # baştaki sıra ("1.") / kod ("MAT.1.3.") hariç ad
+        if row_key is not None and u.name is not None and row_key != norm_label(u.name):
             findings.append(
                 _f(Severity.NEEDS_REVIEW, "UNIT_NAME_MISMATCH", "Özet tablosundaki ad ile birim başlığındaki ad farklı", u, table=row.name.text, unit_name=u.name)
             )
         matched[u.id] = row
-        used_rows.add((row.table_index, row.order))
+        used_rows.add((row.table_index, t.rows.index(row)))
+    matched_tables = {i for i, _ in used_rows}
     for t in tables:
-        for r in t.rows:
-            if r.order is not None and (t.index, r.order) not in used_rows:
+        if t.index not in matched_tables:
+            # Hiçbir birimle eşleşmeyen tablo (başlık/bağlam okunamadı): yalnızca bilgi
+            findings.append(_f(Severity.INFO, "EXPECTED_TABLE_UNMATCHED", "Özet tablosu hiçbir birimle eşleştirilemedi", None, table=t.title.text if t.title else None, page=t.page))
+            continue
+        for n, r in enumerate(t.rows):
+            if r.order is not None and (t.index, n) not in used_rows:
                 findings.append(
                     _f(
                         Severity.FAIL,
@@ -101,7 +148,7 @@ def check_tables(tables: list[ExpectedTable]) -> list[Finding]:
         total = next((r for r in t.rows if r.is_total), None)
         for r in unit_rows:
             if r.lo_count is None:
-                out.append(_f(Severity.NEEDS_REVIEW, "EXPECTED_COUNT_UNREADABLE", "Özet tablosunda öğrenme çıktısı sayısı okunamadı", None, table=t.title.text if t.title else None, order=r.order, raw=r.lo_count_raw))
+                out.append(_f(Severity.INFO, "EXPECTED_COUNT_UNREADABLE", "Özet tablosunda öğrenme çıktısı sayısı okunamadı", None, table=t.title.text if t.title else None, order=r.order, raw=r.lo_count_raw))
         if total is not None and all(r.lo_count is not None for r in unit_rows):
             s = sum(r.lo_count for r in unit_rows)
             if s != total.lo_count:
@@ -205,11 +252,42 @@ def check_sections(u: Unit, schema: ProgramSchema) -> list[Finding]:
     return out
 
 
-def check_learning_outcomes(u: Unit, expected: ExpectedRow | None, schema: ProgramSchema) -> list[Finding]:
+def learn_code_scheme(units: list[Unit], schema: ProgramSchema) -> dict:
+    """Öğrenme çıktısı kodlarının numaralandırma şeması programın çoğunluğundan öğrenilir.
+
+    - theme_segment: sondan ikinci segment birimin sırası mı? (Müzik MÜZ.5.1.3: evet; Matematik
+      MAT.1.3.2: hayır, içerik alanıdır — 5. TEMA "Nesnelerin Geometrisi (1)" MAT.1.3.x)
+    - expected_last: son segment sayıysa her ÖÇ için beklenen numara. Çoğunlukta numaralar birim
+      içinde 1'den başlıyorsa birim içi sıra; aksi halde aynı kod grubunda (son segment hariç)
+      birimler boyunca devam eden sıra (Matematik: MAT.1.1.1-7 1. temada, MAT.1.1.8 2. temada)."""
+    types = schema.lo_segment_types
+    scored = [u for u in units if u.learning_outcomes]
+    theme_ok = sum(
+        1 for u in scored if u.order is not None and all(len(lo.code.segments) >= 2 and lo.code.segments[-2] == str(u.order) for lo in u.learning_outcomes)
+    )
+    theme_segment = len(types) >= 3 and types[-2] == "n" and theme_ok * 2 >= len(scored)
+    per_unit = {(u.id, i): i for u in scored for i in range(1, len(u.learning_outcomes) + 1)}
+    per_group: dict[tuple[str, int], int] = {}
+    counter: Counter = Counter()
+    for u in scored:
+        for i, lo in enumerate(u.learning_outcomes, start=1):
+            g = (lo.code.prefix, tuple(lo.code.segments[:-1]))
+            counter[g] += 1
+            per_group[(u.id, i)] = counter[g]
+
+    def fits(exp: dict) -> int:
+        return sum(1 for u in scored if all(lo.code.segments[-1:] == [str(exp[(u.id, i)])] for i, lo in enumerate(u.learning_outcomes, start=1)))
+
+    expected_last = per_unit if fits(per_unit) >= fits(per_group) else per_group
+    return {"theme_segment": theme_segment, "expected_last": expected_last}
+
+
+def check_learning_outcomes(u: Unit, expected: ExpectedRow | None, schema: ProgramSchema, scheme: dict | None = None) -> list[Finding]:
+    scheme = scheme or {"theme_segment": True, "expected_last": {(u.id, i): i for i in range(1, len(u.learning_outcomes) + 1)}}
     out: list[Finding] = []
     los = u.learning_outcomes
     if expected is None or expected.lo_count is None:
-        out.append(_f(Severity.NEEDS_REVIEW, "EXPECTED_COUNT_MISSING", "Beklenen öğrenme çıktısı sayısı bilinmiyor", u, extracted=len(los)))
+        out.append(_f(Severity.INFO, "EXPECTED_COUNT_MISSING", "Beklenen öğrenme çıktısı sayısı bilinmiyor", u, extracted=len(los)))
     elif expected.lo_count != len(los):
         out.append(
             _f(
@@ -242,10 +320,10 @@ def check_learning_outcomes(u: Unit, expected: ExpectedRow | None, schema: Progr
         else:
             if grade is not None and len(segs) >= 3 and segs[-3] != str(grade):
                 problems.append("sınıf")
-            if u.order is not None and segs[-2] != str(u.order):
+            if scheme["theme_segment"] and u.order is not None and segs[-2] != str(u.order):
                 problems.append("tema sırası")
-            # Son segment sayıysa temadaki sıra olmalı; kısaltmaysa (ör. beceri) ayrı kontrol edilir
-            if types[-1] == "n" and segs[-1] != str(i):
+            # Son segment sayıysa öğrenilen şemaya göre sıra olmalı; kısaltmaysa (ör. beceri) ayrı kontrol edilir
+            if types[-1] == "n" and segs[-1] != str(scheme["expected_last"].get((u.id, i), i)):
                 problems.append("çıktı sırası")
         if problems:
             out.append(_f(Severity.FAIL, "LO_CODE_IDENTITY", "Öğrenme çıktısı kodu birimle/sırayla uyuşmuyor", u, code_raw=lo.code.raw, problems=problems, position=i))
@@ -369,6 +447,17 @@ def check_codes(
                 in_application_of=lo_code.raw if lo_code else None,
             )
         )
+    # Tanımsız kullanılan kodlar, önek ve ilk numarası tanımlarıyla uyan tek kategoriye yazılır (D14.2 -> Değerler;
+    # KB2.x -> Kavramsal Beceriler, KB3.x -> Beceriler Arası İlişkiler). Tekil kategori yoksa yalnızca birim
+    # raporundaki listede kalır.
+    by_path = {c.category: c for c in checks}
+    for norm in sorted(set(not_declared)):
+        c = parse_code(norm)
+        cands = [p for p, ds in u.declarations.items() if p in by_path and any(d.code.prefix == c.prefix for d in ds)]
+        if len(cands) > 1:
+            cands = [p for p in cands if any(d.code.prefix == c.prefix and d.code.numbers[:1] == c.numbers[:1] for d in u.declarations[p])]
+        if len(cands) == 1:
+            by_path[cands[0]].used_not_declared.append(norm)
     return checks, sorted(set(not_declared)), out
 
 
@@ -377,13 +466,13 @@ def check_hours(u: Unit, expected: ExpectedRow | None) -> tuple[int | None, list
 
     secs = [s for s in u.sections if s.label is not None and _hint(s.label.text, HOURS_COLUMN_HINTS)]
     if len(secs) != 1 or secs[0].content is None:
-        return None, [_f(Severity.NEEDS_REVIEW, "HOURS_NOT_FOUND", "Birimde ders saati bölümü tekil olarak bulunamadı", u)]
+        return None, [_f(Severity.INFO, "HOURS_NOT_FOUND", "Birimde ders saati bölümü tekil olarak bulunamadı", u)]
     txt = secs[0].content.text.strip()
     val = int(txt) if txt.isdigit() else None
     if val is None:
-        return None, [_f(Severity.NEEDS_REVIEW, "HOURS_UNREADABLE", "Ders saati sayı olarak okunamadı", u, raw=txt)]
+        return None, [_f(Severity.INFO, "HOURS_UNREADABLE", "Ders saati sayı olarak okunamadı", u, raw=txt)]
     if expected is None or expected.hours is None:
-        return val, [_f(Severity.NEEDS_REVIEW, "EXPECTED_HOURS_MISSING", "Özet tablosunda ders saati bulunamadı", u)]
+        return val, [_f(Severity.INFO, "EXPECTED_HOURS_MISSING", "Özet tablosunda ders saati bulunamadı", u)]
     if expected.hours != val:
         return val, [_f(Severity.FAIL, "HOURS_MISMATCH", "Birimdeki ders saati özet tablosundan farklı", u, expected=expected.hours, extracted=val)]
     return val, []
@@ -540,9 +629,33 @@ def analyze_pdf(path: str) -> ExtractionResult:
     tables = parse_expected_tables(doc, schema)
     units, regions, findings = extract_units(doc, schema, [t.title.text for t in tables if t.title])
 
+    if not schema.structure_pages:
+        findings.append(
+            _f(
+                Severity.NEEDS_REVIEW,
+                "STRUCTURE_PAGE_NOT_FOUND",
+                "Program yapısı/tanıtım sayfası bulunamadı; bölüm başlıkları ve kod deseni tema sayfalarından öğrenildi",
+                None,
+                labels=[l.text for l in schema.labels],
+                lo_prefix=schema.lo_prefix,
+            )
+        )
+    if doc.removed_controls:
+        findings.append(
+            _f(
+                Severity.INFO,
+                "CONTROL_CHARS_REMOVED",
+                "PDF metin katmanındaki görünmez kontrol karakterleri (görünür metin değil) çıkarımda atıldı",
+                None,
+                pages=sorted(doc.removed_controls),
+                count=sum(doc.removed_controls.values()),
+            )
+        )
     findings += check_tables(tables)
     if not tables:
-        findings.append(_f(Severity.FAIL, "EXPECTED_TABLE_NOT_FOUND", "Özet/süre tablosu bulunamadı; beklenen sayılar bilinmiyor"))
+        findings.append(_f(Severity.INFO, "EXPECTED_TABLE_NOT_FOUND", "Özet/süre tablosu bulunamadı; beklenen sayılar bilinmiyor"))
+    merge_title_continuations(units, tables, doc, schema)
+    scheme = learn_code_scheme(units, schema)
     matched, fs = match_expected(units, tables)
     findings += fs
     reports: list[UnitReport] = []
@@ -552,7 +665,7 @@ def analyze_pdf(path: str) -> ExtractionResult:
         exp = matched.get(u.id)
         uf: list[Finding] = []
         uf += check_sections(u, schema)
-        uf += check_learning_outcomes(u, exp, schema)
+        uf += check_learning_outcomes(u, exp, schema, scheme)
         uf += check_applications(u)
         checks, not_declared, cf = check_codes(u, alan_prefixes, min_segs)
         uf += cf
@@ -578,13 +691,22 @@ def analyze_pdf(path: str) -> ExtractionResult:
     findings += check_coverage(units, regions, doc, schema)
 
     findings += check_limited_tables(units, tables)
-    expected_rows = [r for t in tables if t.role == TableRole.SUMMARY for r in t.rows if r.order is not None]
+    summary_tables = [t for t in tables if t.role == TableRole.SUMMARY]
+    expected_rows = [r for t in summary_tables for r in t.rows if r.order is not None]
     expected_total = sum(r.lo_count for r in expected_rows) if expected_rows and all(r.lo_count is not None for r in expected_rows) else None
     extracted_total = sum(len(u.learning_outcomes) for u in units)
-    if len(expected_rows) != len(units):
-        findings.append(_f(Severity.FAIL, "UNIT_COUNT_MISMATCH", "Beklenen ve bulunan tema/ünite sayısı farklı", None, expected=len(expected_rows), found=len(units)))
-    if expected_total is None or expected_total != extracted_total:
-        findings.append(_f(Severity.FAIL, "LO_TOTAL_MISMATCH", "Program toplamında beklenen ve çıkarılan öğrenme çıktısı sayısı farklı", None, expected=expected_total, extracted=extracted_total))
+    # Program toplamları yalnızca tüm özet tabloları birimlerle eşleştiyse karşılaştırılır; aksi halde
+    # beklenen değer bilinmiyor sayılır (ders saati/süre tablosu analizi durdurmaz).
+    tables_usable = bool(summary_tables) and not any(f.check == "EXPECTED_TABLE_UNMATCHED" for f in fs)
+    if not tables_usable:
+        expected_total = None
+        if summary_tables:
+            findings.append(_f(Severity.INFO, "EXPECTED_TOTAL_UNKNOWN", "Özet tabloları birimlerle tam eşleşmediği için program toplamı karşılaştırılmadı", None, extracted=extracted_total))
+    else:
+        if len(expected_rows) != len(units):
+            findings.append(_f(Severity.FAIL, "UNIT_COUNT_MISMATCH", "Beklenen ve bulunan tema/ünite sayısı farklı", None, expected=len(expected_rows), found=len(units)))
+        if expected_total is not None and expected_total != extracted_total:
+            findings.append(_f(Severity.FAIL, "LO_TOTAL_MISMATCH", "Program toplamında beklenen ve çıkarılan öğrenme çıktısı sayısı farklı", None, expected=expected_total, extracted=extracted_total))
 
     for r in reports:
         r.status = _worst([f for f in findings if f.unit_id == r.unit_id])
@@ -608,7 +730,7 @@ def format_report(res: ExtractionResult) -> str:
     L = []
     s = res.schema_
     L.append(f"Kaynak: {res.source} ({res.page_count} sayfa)")
-    L.append(f"Yapı sayfaları: {s.structure_pages} | {s.structure_heading.text}")
+    L.append(f"Yapı sayfaları: {s.structure_pages or 'bulunamadı (tema sayfalarından öğrenildi)'} | {s.structure_heading.text if s.structure_heading else ''}")
     L.append(f"Gerçek veri başlangıcı: s.{s.data_start_page} | birim anahtar kelimesi: {s.unit_keyword} | ÖÇ kod öneki: {s.lo_prefix} ({".".join(s.lo_segment_types)})")
     L.append(f"Tema/ünite: beklenen {res.expected_unit_count}, bulunan {len(res.units)}")
     L.append(f"Öğrenme çıktısı toplamı: beklenen {res.expected_lo_total}, çıkarılan {res.extracted_lo_total}")
@@ -622,6 +744,7 @@ def format_report(res: ExtractionResult) -> str:
                 L.append(f"    {path} (kod kontrolü dışı): {', '.join(d.code.normalized for d in ds)}")
         for c in r.code_checks:
             extra = f" | kullanılmayan: {', '.join(c.declared_not_used)}" if c.declared_not_used else ""
+            extra += f" | TANIMSIZ KULLANILAN: {', '.join(c.used_not_declared)}" if c.used_not_declared else ""
             L.append(f"    {c.category}: tanımlanan {', '.join(c.declared)}{extra}")
         if r.used_not_declared:
             L.append(f"    KULLANILMIŞ AMA TANIMLANMAMIŞ: {', '.join(r.used_not_declared)}")

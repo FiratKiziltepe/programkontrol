@@ -11,6 +11,7 @@ import re
 
 import pandas as pd
 from openpyxl import Workbook
+from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
 from openpyxl.styles import Alignment, Font, PatternFill
 
 from models import Code, ExtractionResult, Section, SectionKind, Unit
@@ -50,9 +51,20 @@ STATUS_COLORS = {
     "WARNING": "FFEB9C",
     "NEEDS_REVIEW": "FFEB9C",
     "PASS": "C6EFCE",
+    "INFO": "EDEDED",  # yalnızca bilgi (ör. süre tablosu bulunamadı)
     "YANLIŞ_BÖLÜM": "D9C3E9",
 }
 RED = "FFC7CE"
+
+
+def _xl_safe(v):
+    """Excel'e yazılamayan kontrol karakteri (PDF metin katmanındaki görünmez glif) kalmışsa görünür "�"
+    ile işaretlenir; hücre sessizce değiştirilmez, dışa aktarma da çökmez."""
+    return ILLEGAL_CHARACTERS_RE.sub("�", v) if isinstance(v, str) else v
+
+
+def _append(ws, row) -> None:
+    ws.append([_xl_safe(v) for v in row])
 
 
 def _ascii_norm(s: str) -> str:
@@ -219,12 +231,25 @@ def code_checks_df(res: ExtractionResult) -> pd.DataFrame:
                     "Birim": r.unit_id,
                     "Kategori": c.category,
                     "Tanımlanan": ", ".join(c.declared),
-                    "Kullanılan": ", ".join(c.used),
+                    "Kullanılan": ", ".join(c.used + c.used_not_declared),
                     "Tanımlı ama kullanılmamış": ", ".join(c.declared_not_used),
+                    "Kullanılmış ama tanımlı değil": ", ".join(c.used_not_declared),
                 }
             )
-        if r.used_not_declared:
-            rows.append({"Birim": r.unit_id, "Kategori": "(kullanılmış ama tanımlanmamış)", "Tanımlanan": "", "Kullanılan": ", ".join(r.used_not_declared), "Tanımlı ama kullanılmamış": ""})
+        placed = {x for c in r.code_checks for x in c.used_not_declared}
+        unplaced = [x for x in r.used_not_declared if x not in placed]
+        if unplaced:
+            # önek/numarasıyla hiçbir tanım kategorisine yerleşmeyen tanımsız kodlar
+            rows.append(
+                {
+                    "Birim": r.unit_id,
+                    "Kategori": "(kategorisi belirlenemeyen)",
+                    "Tanımlanan": "",
+                    "Kullanılan": ", ".join(unplaced),
+                    "Tanımlı ama kullanılmamış": "",
+                    "Kullanılmış ama tanımlı değil": ", ".join(unplaced),
+                }
+            )
     return pd.DataFrame(rows)
 
 
@@ -271,11 +296,11 @@ def system_rows(res: ExtractionResult) -> tuple[list[list[str]], list[tuple[int,
 
 
 def _write_df(ws, df: pd.DataFrame, status_col: str | None = None):
-    ws.append(list(df.columns))
+    _append(ws, list(df.columns))
     for c in ws[1]:
         c.font = Font(bold=True)
     for rec in df.itertuples(index=False):
-        ws.append([("" if v is None else v) for v in rec])
+        _append(ws, [("" if v is None else v) for v in rec])
     if status_col and status_col in df.columns:
         idx = list(df.columns).index(status_col) + 1
         for r in range(2, ws.max_row + 1):
@@ -293,12 +318,12 @@ def build_pdf_excel(res: ExtractionResult) -> bytes:
     wb = Workbook()
     ws = wb.active
     ws.title = "Sistem Biçimi"
-    ws.append(SYSTEM_HEADERS)
+    _append(ws, SYSTEM_HEADERS)
     for c in ws[1]:
         c.font = Font(bold=True)
     rows, merges = system_rows(res)
     for r in rows:
-        ws.append(r)
+        _append(ws, r)
     for col, r1, r2 in merges:
         ws.merge_cells(start_row=r1, start_column=col, end_row=r2, end_column=col)
     for col in ws.columns:
@@ -321,11 +346,11 @@ def build_comparison_excel(res: ExtractionResult, comparison: pd.DataFrame, summ
     wb = Workbook()
     ws = wb.active
     ws.title = "Özet"
-    ws.append(["Kaynak PDF", res.source.split("\\")[-1].split("/")[-1]])
-    ws.append(["PDF genel durum", res.status.value])
-    ws.append(["Tema/ünite (beklenen / bulunan)", f"{res.expected_unit_count} / {len(res.units)}"])
-    ws.append(["Öğrenme çıktısı (beklenen / çıkarılan)", f"{res.expected_lo_total} / {res.extracted_lo_total}"])
-    ws.append([])
+    _append(ws, ["Kaynak PDF", res.source.split("\\")[-1].split("/")[-1]])
+    _append(ws, ["PDF genel durum", res.status.value])
+    _append(ws, ["Tema/ünite (beklenen / bulunan)", f"{res.expected_unit_count} / {len(res.units)}"])
+    _append(ws, ["Öğrenme çıktısı (beklenen / çıkarılan)", f"{res.expected_lo_total} / {res.extracted_lo_total}"])
+    _append(ws, [])
     _write_df_into(ws, summary, "Durum")
     _write_df(wb.create_sheet("Karşılaştırma"), comparison, "Durum")
     _write_df(wb.create_sheet("PDF Bulguları"), findings_df(res), "Önem")
@@ -336,9 +361,9 @@ def build_comparison_excel(res: ExtractionResult, comparison: pd.DataFrame, summ
 
 def _write_df_into(ws, df: pd.DataFrame, status_col: str):
     start = ws.max_row + 1
-    ws.append(list(df.columns))
+    _append(ws, list(df.columns))
     for rec in df.itertuples(index=False):
-        ws.append(list(rec))
+        _append(ws, list(rec))
     idx = list(df.columns).index(status_col) + 1
     for r in range(start + 1, ws.max_row + 1):
         ws.cell(r, idx).fill = PatternFill("solid", fgColor=STATUS_COLORS.get(str(ws.cell(r, idx).value), RED))

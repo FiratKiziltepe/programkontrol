@@ -72,35 +72,6 @@ def _content_spans(doc: PdfDoc, page: int) -> list[Span]:
     return [s for s in doc.page_spans(page) if s.id not in doc.furniture and s.text.strip()]
 
 
-def find_structure(doc: PdfDoc, body: frozenset[int]) -> tuple[Span, Span, list[int]]:
-    """(yapı başlığı span'ı, örnek tema başlığı span'ı, yapı sayfaları)."""
-    for s in doc.spans:
-        if s.id in doc.furniture or s.color in body:
-            continue
-        if not any(h in tr_upper(s.text) for h in STRUCTURE_HINTS):
-            continue
-        # İçindekiler sayfasını elemek için: aynı sayfada gövde renginde olmayan
-        # "N. KELİME: ..." biçiminde örnek bir birim başlığı bulunmalı.
-        titles = [
-            t
-            for t in _content_spans(doc, s.page)
-            if t.color not in body and t.color != s.color and UNIT_TITLE_RE.match(t.text)
-        ]
-        if not titles:
-            continue
-        sample = titles[0]
-        pages = [s.page]
-        for p in range(s.page + 1, doc.page_count + 1):
-            spans = _content_spans(doc, p)
-            big = any(x.size >= s.size * 0.95 for x in spans)
-            has_title = any(x.color == sample.color and UNIT_TITLE_RE.match(x.text) for x in spans)
-            if big or has_title or not spans:
-                break
-            pages.append(p)
-        return s, sample, pages
-    raise SchemaError("Program yapısı/tanıtım sayfası bulunamadı")
-
-
 def merge_label_lines(label_spans: list[Span]) -> list[list[Span]]:
     """Aynı etikete ait çok satırlı etiket span'larını birleştirir (layout ile)."""
     rows = group_rows(label_spans)
@@ -129,12 +100,14 @@ def merge_label_lines(label_spans: list[Span]) -> list[list[Span]]:
     return labels
 
 
-def learn_labels(doc: PdfDoc, heading: Span, sample_title: Span, pages: list[int], body: frozenset[int]) -> tuple[list[int], list[LabelDef]]:
+def learn_labels(doc: PdfDoc, heading: Span | None, sample_title: Span, pages: list[int], body: frozenset[int], size_cap: float) -> tuple[list[int], list[LabelDef]]:
     cand: list[Span] = []
     for p in pages:
         for s in _content_spans(doc, p):
-            if s.id == heading.id or s.color in body or s.color == sample_title.color or s.size >= heading.size * 0.95:
+            if (heading is not None and s.id == heading.id) or s.color in body or s.color == sample_title.color or s.size >= size_cap * 0.95:
                 continue
+            if not any(ch.isalnum() for ch in s.text):
+                continue  # başlık renginde örnek içerik işareti (Afet s.13: "ALAN" yanında "-")
             cand.append(s)
     colors = sorted({s.color for s in cand})
     labels: list[LabelDef] = []
@@ -175,6 +148,22 @@ def learn_lo_code(doc: PdfDoc, pages: list[int], body: frozenset[int]) -> tuple[
     raise SchemaError("Yapı sayfasında örnek öğrenme çıktısı kodu bulunamadı")
 
 
+def _labels_used_in_units(doc: PdfDoc, labels: list[LabelDef], excluded: frozenset[int], data_start: int) -> list[LabelDef]:
+    """Tema sayfalarında hiç geçmeyen yapı sayfası metni bölüm başlığı değildir (ör. yapı sayfasının
+    kendi başlığı ya da açıklama notu). Hiçbiri geçmiyorsa liste değiştirilmez (tahmin yok)."""
+    by_color: dict[int, list[Span]] = defaultdict(list)
+    for s in doc.spans:
+        if s.page >= data_start and s.id not in doc.furniture and s.text.strip() and s.color not in excluded:
+            by_color[s.color].append(s)
+    seen: set[str] = set()
+    for spans in by_color.values():
+        for grp in merge_label_lines(spans):
+            seen.add(norm_label(" ".join(x.text for x in grp)))
+            seen.update(norm_label(p) for p in " ".join(x.text for x in grp).split("/"))
+    used = [l for l in labels if l.norm in seen or any(p in seen for p in l.parts) or any(v.startswith(l.norm) for v in seen if len(l.norm) >= 4)]
+    return used or labels
+
+
 def confirm_label_colors(doc: PdfDoc, labels: list[LabelDef], structure_colors: list[int], excluded: frozenset[int], data_start: int) -> list[int]:
     """Bölüm başlığı renkleri tema sayfalarında doğrulanır.
 
@@ -204,29 +193,247 @@ def _color_dist(a: int, b: int) -> int:
     return max(abs(((a >> s) & 255) - ((b >> s) & 255)) for s in (16, 8, 0))
 
 
+def find_unit_titles(doc: PdfDoc, body: frozenset[int]) -> tuple[str, list[Span]]:
+    """Belge genelinde birim başlıkları ("N. TEMA: …", "N. ÜNİTE: …", "N. ÖĞRENME ALANI: …").
+
+    Gövde renginde olmayan ve birim başlığı biçimindeki span'lar toplanır; en çok sayfada geçen
+    anahtar kelime birim anahtar kelimesidir. Program bazında kelime hardcode edilmez."""
+    cands = [s for s in doc.spans if s.id not in doc.furniture and s.color not in body and UNIT_TITLE_RE.match(s.text)]
+    pages_by_kw: dict[str, set[int]] = defaultdict(set)
+    for s in cands:
+        pages_by_kw[norm_label(UNIT_TITLE_RE.match(s.text).group(2))].add(s.page)
+    if not pages_by_kw:
+        raise SchemaError("PDF'de tema/ünite/öğrenme alanı başlığı (\"1. TEMA: …\" biçiminde) bulunamadı")
+    kw_norm = max(pages_by_kw, key=lambda k: len(pages_by_kw[k]))
+    titles = [s for s in cands if norm_label(UNIT_TITLE_RE.match(s.text).group(2)) == kw_norm]
+    keyword = Counter(UNIT_TITLE_RE.match(s.text).group(2) for s in titles).most_common(1)[0][0]
+    return keyword, titles
+
+
+def locate_structure(doc: PdfDoc, body: frozenset[int], titles: list[Span]) -> tuple[Span | None, Span | None, list[int]]:
+    """(yapı başlığı, yapı sayfasındaki örnek birim başlığı, yapı sayfaları); bulunamazsa (None, None, []).
+
+    Yapı sayfası, gerçek bir tema sayfasının küçültülmüş örneğidir. Şunlardan biriyle tanınır:
+    - "…YAPISI" başlığından sonraki ilk birim başlıklı sayfa (başlık ile şema ayrı sayfalarda
+      olabilir; Matematik: başlık s.12, şema s.17-18),
+    - birim başlığı diğer birim başlıklarından belirgin biçimde küçük basılmış sayfa.
+    İçindekiler sayfasındaki "…YAPISI" satırı elenir: ilk birim başlıklı sayfadan önceki son ipucu alınır."""
+    title_color = Counter(s.color for s in titles).most_common(1)[0][0]
+    titles = sorted((s for s in titles if s.color in near_colors(doc, title_color)), key=lambda s: (s.page, s.y0))
+    if not titles:
+        return None, None, []
+    median_size = sorted(s.size for s in titles)[len(titles) // 2]
+    first_title_page = titles[0].page
+    hints = [
+        s
+        for s in doc.spans
+        if s.id not in doc.furniture and s.color not in body and s.page <= first_title_page and any(h in tr_upper(s.text) for h in STRUCTURE_HINTS)
+    ]
+    heading = hints[-1] if hints else None
+    sample = None
+    if heading is not None:
+        after = [t for t in titles if t.page >= heading.page]
+        if after and after[0].page - heading.page <= 10:
+            t = after[0]
+            # Örnek şemadan hemen sonraki birim başlığı aynı birimdir (Matematik s.17 şema, s.19 gerçek tema).
+            # Yalnızca "sonra bir yerde tekrar geçiyor" yetmez: aynı ad farklı sınıflarda da geçer.
+            nxt = next((o for o in titles if o.page > t.page), None)
+            again = nxt is not None and norm_label(nxt.text) == norm_label(t.text)
+            if t.page == heading.page or again or t.size < median_size * 0.9 or _scaled_down_page(doc, body, titles, t.page):
+                sample = t
+    if sample is None and (titles[0].size < median_size * 0.9 or _scaled_down_page(doc, body, titles, titles[0].page)):
+        sample = titles[0]
+    if sample is None:
+        return heading, None, []
+    stop_size = heading.size if heading is not None else median_size
+    pages = [sample.page]
+    for p in range(sample.page + 1, doc.page_count + 1):
+        spans = _content_spans(doc, p)
+        big = any(x.size >= stop_size * 0.95 for x in spans)
+        has_title = any(x.id in {t.id for t in titles} for x in spans)
+        if big or has_title or not spans:
+            break
+        pages.append(p)
+    return heading, sample, pages
+
+
+def _heading_sizes(doc: PdfDoc, body: frozenset[int], title_ids: set[str], page: int) -> list[float]:
+    return [
+        s.size
+        for s in _content_spans(doc, page)
+        if s.color not in body and s.id not in title_ids and font_rank(s.font) >= 1 and any(ch.isalpha() for ch in s.text)
+    ]
+
+
+def _scaled_down_page(doc: PdfDoc, body: frozenset[int], titles: list[Span], page: int) -> bool:
+    """Sayfadaki başlık benzeri (renkli, kalın) metinler diğer birim sayfalarındakilerden belirgin biçimde
+    küçük mü? Yapı sayfası tema sayfasının küçültülmüş örneğidir (Kimya s.11: başlıklar 8 pt, tema
+    sayfalarında 10 pt); birim başlığı küçültülmemiş olsa da böyle tanınır."""
+    ids = {t.id for t in titles}
+    here = _heading_sizes(doc, body, ids, page)
+    others = [x for p in sorted({t.page for t in titles if t.page != page})[:6] for x in _heading_sizes(doc, body, ids, p)]
+    if len(here) < 5 or len(others) < 5:
+        return False
+    med = lambda xs: sorted(xs)[len(xs) // 2]
+    return med(here) < 0.85 * med(others)
+
+
+def _adaptive_label_groups(spans: list[Span]) -> list[list[Span]]:
+    """Başlık satırlarını, birimin kendi başlık satır aralığına göre birleştirir.
+
+    Sabit eşik yetmez: Zazaca'da başlık içi aralık 2 pt, başlıklar arası 3,7 pt; Fen 6-8. sınıfta başlık
+    içi 4,9 pt. Birimde aynı renk/kalınlıktaki alt alta başlık satırları arasındaki en küçük boşluk
+    başlık içi aralıktır; bundan belirgin biçimde büyük boşluk yeni başlıktır."""
+    lines: list[list[Span]] = []
+    for r in group_rows(spans):
+        by_color: dict[int, list[Span]] = {}
+        for x in r:
+            by_color.setdefault(x.color, []).append(x)
+        lines.extend(by_color.values())
+
+    def joinable(a: list[Span], b: list[Span]) -> float | None:
+        p, c = a[-1], b[0]
+        if c.page != p.page or c.color != p.color:
+            return None
+        if not (font_rank(c.font) == font_rank(p.font) or c.text.lstrip().startswith("(")):
+            return None
+        if min(max(x.x1 for x in a), max(x.x1 for x in b)) - max(min(x.x0 for x in a), min(x.x0 for x in b)) <= -2:
+            return None
+        lead = c.y0 - max(x.y1 for x in a)
+        return lead if -0.3 * p.size <= lead <= 1.0 * p.size else None
+
+    leads = [l for a, b in zip(lines, lines[1:]) if (l := joinable(a, b)) is not None]
+    if not leads:
+        return lines
+    # En sık görülen aralık başlık içi aralıktır (en küçüğü değil: Zazaca "ÖĞRENME ÇIKTILARI" / "SÜREÇ
+    # BİLEŞENLERİ" arası 0 pt, başlık içi aralıkların çoğu 2 pt)
+    intra = max(Counter(round(l * 2) / 2 for l in leads).most_common(1)[0][0], 0.0)
+    limit = intra * 1.4 + 0.5
+    groups: list[list[Span]] = []
+    for ln in lines:
+        if groups and (l := joinable(groups[-1], ln)) is not None and l <= limit:
+            groups[-1].extend(ln)
+        else:
+            groups.append(list(ln))
+    return groups
+
+
+def learn_labels_from_units(doc: PdfDoc, body: frozenset[int], title_colors: frozenset[int], titles: list[Span], data_start: int) -> tuple[list[int], list[LabelDef]]:
+    """Yapı sayfası yoksa bölüm başlıkları tema sayfalarından öğrenilir: gövde/başlık renginde olmayan,
+    kalın/orta kalın ve birimlerin en az yarısında tekrar eden başlık metinleri. Sıra, birimlerdeki
+    ortalama sıradır."""
+    unit_pages = sorted({t.page for t in titles if t.page >= data_start})
+    if not unit_pages:
+        return [], []
+
+    def unit_of(page: int) -> int:
+        return max(i for i, p in enumerate(unit_pages) if p <= page) if page >= unit_pages[0] else -1
+
+    cand = [
+        s
+        for s in doc.spans
+        if s.page >= data_start
+        and s.id not in doc.furniture
+        and s.text.strip()
+        and s.color not in body
+        and s.color not in title_colors
+        and font_rank(s.font) >= 1
+        and any(ch.isalpha() for ch in s.text)
+    ]
+    by_unit: dict[int, list[Span]] = defaultdict(list)
+    for x in cand:
+        by_unit[unit_of(x.page)].append(x)
+    groups = [g for u, xs in sorted(by_unit.items()) if u >= 0 for g in _adaptive_label_groups(xs)]
+    occ: dict[str, list[tuple[int, int, list[Span]]]] = defaultdict(list)  # norm -> (birim, birimdeki sıra, span'lar)
+    per_unit_counter: Counter[int] = Counter()
+    for grp in groups:
+        n = norm_label(" ".join(x.text for x in grp))
+        if len(n) < 3 or GENERIC_CODE_START_RE.match(grp[0].text):
+            continue
+        u = unit_of(grp[0].page)
+        if u < 0:
+            continue
+        occ[n].append((u, per_unit_counter[u], grp))
+        per_unit_counter[u] += 1
+    n_units = len(unit_pages)
+    keep = {n: o for n, o in occ.items() if len({u for u, _, _ in o}) >= max(2, n_units / 2)}
+    order = sorted(keep, key=lambda n: sum(i for _, i, _ in keep[n]) / len(keep[n]))
+    labels = []
+    for n in order:
+        grp = keep[n][0][2]
+        f = make_field(grp)
+        parts = [norm_label(p) for p in f.text.split("/") if norm_label(p)]
+        labels.append(
+            LabelDef(
+                text=Counter(" ".join(x.text for x in g).replace("\n", " ").strip() for _, _, g in keep[n]).most_common(1)[0][0],
+                norm=n,
+                parts=parts if len(parts) > 1 else [],
+                rank=font_rank(grp[0].font),
+                color=Counter(g[0].color for _, _, g in keep[n]).most_common(1)[0][0],
+                source_spans=f.source_spans,
+            )
+        )
+    return sorted({l.color for l in labels}), labels
+
+
+GENERIC_CODE_START_RE = re.compile(r"^\s*[^\W\d_]{1,6}[\s.]*\d")
+
+
+def learn_lo_code_from_units(doc: PdfDoc, body: frozenset[int], data_start: int) -> tuple[str, list[str], Span]:
+    """Yapı sayfasında örnek kod yoksa ÖÇ kodu deseni tema sayfalarından öğrenilir: gövde renginde,
+    satır başında en sık geçen en az üç segmentli kod biçimi (ör. "MAT.1.1.1.")."""
+    pat = re.compile(rf"^\s*([^\W\d_]+)[\s.]*(\d+(?:[\s.]+\d+)+(?:[\s.]+{UPPER_SEGMENT}(?=[.\s]|$))?)")
+    shapes: Counter[tuple[str, tuple[str, ...]]] = Counter()
+    example: dict[tuple[str, tuple[str, ...]], Span] = {}
+    for s in doc.spans:
+        if s.page < data_start or s.id in doc.furniture or s.color not in body:
+            continue
+        m = pat.match(s.text)
+        if not m:
+            continue
+        types = tuple("n" if x.isdigit() else "a" for x in re.findall(r"\d+|[^\W\d_]+", m.group(2)))
+        if len(types) >= 3:
+            key = (m.group(1), types)
+            shapes[key] += 1
+            example.setdefault(key, s)
+    if not shapes:
+        raise SchemaError("Öğrenme çıktısı kodu deseni (ör. \"MAT.1.1.1.\") bulunamadı")
+    key = shapes.most_common(1)[0][0]
+    return key[0], list(key[1]), example[key]
+
+
 def detect_schema(doc: PdfDoc) -> ProgramSchema:
     dominant = body_color(doc)
     # Gövde kümesi daha geniş tutulur: Fen s.16 açıklamaları #000000/#000C14, gövde #221F1F;
     # s.127'de bileşen içindeki tek kelime "Işığın" #000000. Hepsi siyaha yakın gövde metnidir.
     body = near_colors(doc, dominant, tol=BODY_COLOR_TOL)
-    heading, sample, pages = find_structure(doc, body)
-    label_colors, labels = learn_labels(doc, heading, sample, pages, body)
-    keyword = UNIT_TITLE_RE.match(sample.text).group(2)
-    prefix, seg_types, lo_span = learn_lo_code(doc, pages, body)
-    data_start = None
-    for s in doc.spans:
-        if s.page > pages[-1] and s.color == sample.color and _is_unit_title(s.text, keyword):
-            data_start = s.page
-            break
-    if data_start is None:
-        raise SchemaError("Yapı sayfasından sonra gerçek tema/ünite başlığı bulunamadı")
-    title_colors = near_colors(doc, sample.color)
+    keyword, titles = find_unit_titles(doc, body)
+    heading, sample, pages = locate_structure(doc, body, titles)
+    title_color = sample.color if sample is not None else Counter(s.color for s in titles).most_common(1)[0][0]
+    title_colors = near_colors(doc, title_color)
+    after = [t for t in titles if t.color in title_colors and (not pages or t.page > pages[-1])]
+    if not after:
+        raise SchemaError("Tema/ünite başlığı bulunamadı")
+    data_start = min(t.page for t in after)
+    if sample is not None:
+        # Boyut üst sınırı: yapı başlığı aynı sayfadaysa onun boyutu, değilse gerçek birim başlıklarının boyutu
+        own_heading = heading if heading is not None and heading.page in pages else None
+        cap = own_heading.size if own_heading is not None else sorted(t.size for t in after)[len(after) // 2]
+        label_colors, labels = learn_labels(doc, own_heading, sample, pages, body, cap)
+        labels = _labels_used_in_units(doc, labels, body | title_colors, data_start)
+        try:
+            prefix, seg_types, lo_span = learn_lo_code(doc, pages, body)
+        except SchemaError:
+            prefix, seg_types, lo_span = learn_lo_code_from_units(doc, body, data_start)
+    else:
+        label_colors, labels = learn_labels_from_units(doc, body, title_colors, after, data_start)
+        prefix, seg_types, lo_span = learn_lo_code_from_units(doc, body, data_start)
     label_colors = confirm_label_colors(doc, labels, label_colors, body | title_colors, data_start)
     return ProgramSchema(
         structure_pages=pages,
-        structure_heading=make_field([heading]),
+        structure_heading=make_field([heading]) if heading is not None and pages else None,
         unit_keyword=keyword,
-        unit_title_color=sample.color,
+        unit_title_color=title_color,
         unit_title_colors=sorted(title_colors),
         body_color=dominant,
         body_colors=sorted(body),
@@ -351,7 +558,8 @@ def parse_expected_tables(doc: PdfDoc, schema: ProgramSchema) -> list[ExpectedTa
     tables: list[ExpectedTable] = []
     small_glyphs = fitz.TOOLS.set_small_glyph_heights()  # find_tables bu global ayarı değiştirir
     try:
-        last_page = schema.structure_pages[0] - 1
+        # Özet tabloları yapı sayfasından (yoksa ilk tema sayfasından) öncedir
+        last_page = (schema.structure_pages[0] if schema.structure_pages else schema.data_start_page) - 1
         for pno in range(1, last_page + 1):
             spans = _content_spans(doc, pno)
             page_txt = " ".join(s.text for s in spans)
@@ -359,7 +567,7 @@ def parse_expected_tables(doc: PdfDoc, schema: ProgramSchema) -> list[ExpectedTa
                 continue
             prev_bottom = 0.0
             for t in fz[pno - 1].find_tables().tables:
-                title = _table_title(t.bbox, spans, schema, prev_bottom)
+                title = _inner_title(t, spans, schema) or _table_title(t.bbox, spans, schema, prev_bottom)
                 prev_bottom = t.bbox[3]
                 et = _parse_lo_list(t, spans, pno, len(tables), schema, title) or _parse_table(t, spans, pno, len(tables), schema, title)
                 if et is not None:
@@ -397,6 +605,26 @@ def _assign_alternatives(tables: list[ExpectedTable]) -> None:
         for t, h in zip(group, hours):
             if h != top:
                 t.role = TableRole.ALTERNATIVE
+
+
+def _inner_title(t, spans: list[Span], schema: ProgramSchema) -> TextField | None:
+    """Tablonun ilk satırı tam genişlikte tek hücreyse ve sütun başlığı değilse tablonun başlığıdır
+    (Matematik s.10: tablo içinde "1. SINIF MATEMATİK DERSİ")."""
+    if not t.rows:
+        return None
+    cells = [c for c in t.rows[0].cells if c is not None]
+    fields = [(c, f) for c in cells if (f := make_field(_spans_in(spans, c))) is not None]
+    if len(fields) != 1:
+        return None
+    c, f = fields[0]
+    tx0, _, tx1, _ = t.bbox
+    if c[2] - c[0] < 0.8 * (tx1 - tx0):
+        return None
+    if _hint(f.text, LO_COLUMN_HINTS) or _hint(f.text, HOURS_COLUMN_HINTS) or _hint(f.text, ORDER_COLUMN_HINTS):
+        return None
+    if norm_label(f.text) == norm_label(schema.unit_keyword):
+        return None
+    return f
 
 
 def _table_title(bbox, spans: list[Span], schema: ProgramSchema, prev_bottom: float) -> TextField | None:
@@ -463,12 +691,15 @@ def _spans_in(spans: list[Span], bbox) -> list[Span]:
 
 def _parse_table(t, spans: list[Span], pno: int, index: int, schema: ProgramSchema, title: TextField | None) -> ExpectedTable | None:
     rows = []
+    in_title = set(title.source_spans) if title is not None else set()
     for r in t.rows:
         cells = []
         for c in r.cells:
             if c is None:
                 continue
             f = make_field(_spans_in(spans, c))
+            if f is not None and set(f.source_spans) <= in_title:
+                continue  # tablo içindeki başlık satırı
             cells.append((c, f))
         rows.append(cells)
     header_cells, data_rows = [], []

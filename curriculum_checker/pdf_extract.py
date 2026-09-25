@@ -8,7 +8,7 @@ from __future__ import annotations
 import re
 import unicodedata
 from collections import Counter, defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import fitz  # PyMuPDF
 
@@ -24,6 +24,7 @@ class PdfDoc:
     page_sizes: dict[int, tuple[float, float]]
     spans: list[Span]
     furniture: set[str]  # sayfa üst/alt bilgisi, sayfa numarası span id'leri
+    removed_controls: dict[int, int] = field(default_factory=dict)  # sayfa -> atılan görünmez kontrol karakteri sayısı
 
     def page_spans(self, page: int) -> list[Span]:
         return [s for s in self.spans if s.page == page]
@@ -37,6 +38,7 @@ def extract_spans(path: str) -> PdfDoc:
     doc = fitz.open(path)
     spans: list[Span] = []
     sizes: dict[int, tuple[float, float]] = {}
+    removed: dict[int, int] = {}
     for pno, page in enumerate(doc, start=1):
         sizes[pno] = (page.rect.width, page.rect.height)
         idx = 0
@@ -49,7 +51,7 @@ def extract_spans(path: str) -> PdfDoc:
                         Span(
                             id=f"P{pno}_S{idx}",
                             page=pno,
-                            text=sp["text"],
+                            text=_visible(sp["text"], pno, removed),
                             bbox=tuple(sp["bbox"]),
                             font=sp["font"],
                             size=round(sp["size"], 2),
@@ -62,7 +64,20 @@ def extract_spans(path: str) -> PdfDoc:
     page_count = doc.page_count
     doc.close()
     furniture = detect_furniture(spans, sizes, page_count)
-    return PdfDoc(path, page_count, sizes, spans, furniture)
+    return PdfDoc(path, page_count, sizes, spans, furniture, removed)
+
+
+# Görünür metin olmayan kontrol karakterleri (sekme ve satır sonu hariç). PyMuPDF'in yeni sürümleri, metin
+# katmanında karşılığı olmayan glifler için bunları üretir (ör. Arnavutça s.11 madde imleri "\x07"); eski
+# sürümler hiç vermez. Görünür metin olmadıkları ve Excel'e yazılamadıkları için atılır, sayısı raporlanır.
+_CONTROL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+
+
+def _visible(text: str, page: int, removed: dict[int, int]) -> str:
+    out, n = _CONTROL_RE.subn("", text)
+    if n:
+        removed[page] = removed.get(page, 0) + n
+    return out
 
 
 def detect_furniture(spans: list[Span], sizes: dict[int, tuple[float, float]], page_count: int) -> set[str]:

@@ -1,4 +1,7 @@
-PyMuPDF>=1.23
+# Sürüm sabit: 1.24+ bazı fontlarda noktalı "İ" glifini "I" okuyor, satır sonu tiresini U+00AD ve
+# görünmez glifleri kontrol karakteri olarak veriyor (Arnavutça s.103 "MEVSİMLER"). 1.23.x yalnızca
+# Python <= 3.12 için paketli: Streamlit Cloud'da Python 3.12 seçilmeli.
+PyMuPDF==1.23.26
 pydantic>=2
 pandas>=2
 openpyxl>=3.1

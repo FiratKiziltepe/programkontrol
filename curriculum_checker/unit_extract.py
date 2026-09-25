@@ -165,13 +165,20 @@ def _pull_aligned_rows(prev: _RawSection, lab: _Label) -> list[Span]:
         return []
     rows = group_rows(same_page)
     k = len(rows)
-    # Satırın dikey merkezi başlığın üst kenarında veya altında olmalı (başlıkla aynı hizada)
-    while k > 0 and rows[k - 1][0].yc >= a.y0 and min(s.x0 for s in rows[k - 1]) >= a.x1 - 2:
+    # Satırın dikey merkezi başlığın üst kenarında veya altında olmalı (başlıkla aynı hizada). Başlığa
+    # göre ortalanan blok başlığın birkaç pt üstünden başlayabilir (Matematik s.57: "E1.1. Merak, …"
+    # yc=312, "EĞİLİMLER" y0=313); bu toleransla alınan satır ancak önceki içerikten paragraf
+    # boşluğuyla ayrılıyorsa taşınır (Arnavutça s.218: paragrafın son satırı yc=264, "FARKLILAŞTIRMA"
+    # y0=265, önceki satırla arası normal satır aralığı -> taşınmaz).
+    tol = 0.5 * a.size
+    while k > 0 and rows[k - 1][0].yc >= a.y0 - tol and min(s.x0 for s in rows[k - 1]) >= a.x1 - 2:
         k -= 1
     if k == len(rows):
         return []
     first = rows[k]
     if k > 0:
+        if first[0].yc < a.y0 and min(s.y0 for s in first) - max(s.y1 for s in rows[k - 1]) <= 0.5 * a.size:
+            return []
         before_yc = rows[k - 1][0].yc  # önceki bölümün son satırı
     elif prev.label is not None and prev.label.anchor.page == a.page:
         before_yc = prev.label.anchor.yc  # önceki bölümün başka satırı yok: önceki başlık

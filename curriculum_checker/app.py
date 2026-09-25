@@ -5,15 +5,21 @@
 Akış:
 1. PDF Analizi       – PDF yüklenir, içerik çıkarılır, tablolar gösterilir, Excel indirilir.
 2. PDF Kontrolleri   – sayı, kod ve bölüm kontrollerinin bulguları.
-3. Excel Karşılaştırma – sistemden indirilen Excel yüklenir, iki yönlü karşılaştırılır.
-4. Rapor             – özet ve indirilebilir rapor.
+3. Gemini Doğrulama  – isteğe bağlı: tema sayfalarının görüntüsü TARAYICIDAN Gemini'ye gönderilir (API anahtarı
+                       sunucuya gelmez); yerleşim (başlıklar, ÖÇ/uygulama kodları) çıkarımla karşılaştırılır.
+                       Gemini metni çıkarıma girmez.
+4. Excel Karşılaştırma – sistemden indirilen Excel yüklenir, iki yönlü karşılaştırılır.
+5. Rapor             – özet ve indirilebilir rapor.
 """
 from __future__ import annotations
 
 import hashlib
+import io
 import os
 import tempfile
+import traceback
 
+import fitz
 import pandas as pd
 import streamlit as st
 
@@ -30,11 +36,14 @@ from excel_export import (
     units_df,
 )
 from excel_import import read_system_excel
+import gemini_verify
+from gemini_component import gemini_browser
 from schema_detect import SchemaError
 from validators import analyze_pdf
 
 st.set_page_config(page_title="Öğretim Programı Kontrol", page_icon="📘", layout="wide")
 
+TESTED_PYMUPDF = "1.23.26"  # requirements.txt ile aynı tutulmalı
 SEVERITY_ORDER = ["FAIL", "NEEDS_REVIEW", "WARNING", "INFO"]
 SEVERITY_TR = {"FAIL": "Hata", "NEEDS_REVIEW": "İnceleme gerekli", "WARNING": "Uyarı", "INFO": "Bilgi"}
 STATUS_TR = {"PASS": "Geçti", "WARNING": "Uyarılarla geçti", "NEEDS_REVIEW": "İnceleme gerekli", "FAIL": "Hata"}
@@ -72,6 +81,10 @@ def style_by(df: pd.DataFrame, col: str):
     return df.style.apply(row_style, axis=1)
 
 
+def _expected(v) -> str:
+    return "?" if v is None else str(v)
+
+
 def _save_upload(upload, suffix: str) -> str:
     data = upload.getvalue()
     digest = hashlib.sha1(data).hexdigest()[:12]
@@ -101,6 +114,11 @@ with st.sidebar:
         "PDF'den üretilen Excel indirilebilir.\n\n"
         "2) Ardından müfredat sisteminden indirilen Excel'i yükleyip karşılaştırın."
     )
+    if fitz.VersionBind != TESTED_PYMUPDF:
+        st.warning(
+            f"PyMuPDF {fitz.VersionBind} kullanılıyor; araç {TESTED_PYMUPDF} ile doğrulandı. Yeni sürümler bazı "
+            "fontlarda noktalı İ harfini I okuyabilir. Streamlit Cloud'da Python 3.12 seçin (requirements.txt)."
+        )
     res = st.session_state.get("res")
     if res is not None:
         st.success(f"Analiz edilen PDF: **{st.session_state['pdf_name']}**")
@@ -108,9 +126,9 @@ with st.sidebar:
     if st.session_state.get("cmp") is not None:
         st.info(f"Karşılaştırılan Excel: **{st.session_state['xl_name']}**")
 
-tab_pdf, tab_checks, tab_cmp, tab_report = st.tabs(
+tab_pdf, tab_checks, tab_gemini, tab_cmp, tab_report = st.tabs(
     # "1." Markdown'da numaralı liste sayılmasın diye kaçışlanır
-    ["1\\. PDF Analizi", "2\\. PDF Kontrolleri", "3\\. Excel Karşılaştırma", "4\\. Rapor"]
+    ["1\\. PDF Analizi", "2\\. PDF Kontrolleri", "3\\. Gemini Doğrulama", "4\\. Excel Karşılaştırma", "5\\. Rapor"]
 )
 
 # ---------------------------------------------------------------- 1. PDF Analizi
@@ -126,12 +144,18 @@ with tab_pdf:
                 result = _analyze_cached(path, digest)
             except SchemaError as e:
                 status.update(label="Analiz tamamlanamadı", state="error")
-                st.error(f"Program yapısı bulunamadı: {e}")
+                st.error(f"PDF'de öğretim programı yapısı tanınamadı: {e}")
+                result = None
+            except Exception as e:  # beklenmeyen hata: ayrıntı gösterilir, uygulama çökmez
+                status.update(label="Analiz tamamlanamadı", state="error")
+                st.error(f"Beklenmeyen bir hata oluştu: {type(e).__name__}: {e}")
+                with st.expander("Hata ayrıntısı (geliştirici için)"):
+                    st.code(traceback.format_exc())
                 result = None
             else:
                 status.update(label="Analiz tamamlandı", state="complete", expanded=False)
         if result is not None:
-            st.session_state.update(res=result, pdf_name=upload.name, pdf_digest=digest, cmp=None, xl_name=None)
+            st.session_state.update(res=result, pdf_name=upload.name, pdf_digest=digest, cmp=None, xl_name=None, gemini=None, gv_payload=None)
             st.rerun()
 
     res = st.session_state.get("res")
@@ -142,10 +166,14 @@ with tab_pdf:
         sev = fdf["Önem"].value_counts() if not fdf.empty else {}
         c1, c2, c3, c4, c5 = st.columns(5)
         c1.metric("Genel durum", STATUS_TR.get(res.status.value, res.status.value))
-        c2.metric("Tema / ünite", f"{len(res.units)}/{res.expected_unit_count}", help="Bulunan / özet tablosunda beklenen")
-        c3.metric("Öğrenme çıktısı", f"{res.extracted_lo_total}/{res.expected_lo_total}", help="Çıkarılan / özet tablosunda beklenen")
+        exp_units = res.expected_unit_count if res.expected_lo_total is not None else None
+        c2.metric("Tema / ünite", f"{len(res.units)}/{_expected(exp_units)}", help="Bulunan / süre tablosunda beklenen (? = tablo yok veya birimlerle eşleşmedi)")
+        c3.metric("Öğrenme çıktısı", f"{res.extracted_lo_total}/{_expected(res.expected_lo_total)}", help="Çıkarılan / süre tablosunda beklenen (? = tablo yok veya birimlerle eşleşmedi)")
         c4.metric("Hata", int(sev.get("FAIL", 0)))
         c5.metric("İnceleme gerekli", int(sev.get("NEEDS_REVIEW", 0)))
+
+        if not res.schema_.structure_pages:
+            st.warning("Program yapısı/tanıtım sayfası bulunamadı; bölüm başlıkları ve kod deseni tema sayfalarından öğrenildi. Sonuçları inceleyin.")
 
         st.subheader("Temalar / üniteler")
         st.dataframe(style_by(units_df(res), "Durum"), hide_index=True, width="stretch")
@@ -213,7 +241,100 @@ with tab_checks:
                     width="stretch",
                 )
 
-# ---------------------------------------------------------------- 3. Excel Karşılaştırma
+# ---------------------------------------------------------------- 3. Gemini Doğrulama
+
+GEMINI_STATUS_TR = {
+    "UYUMLU": "Uyumlu",
+    "YALNIZCA_PDF_CIKARIMI": "Çıkarımda var, Gemini görmedi",
+    "YALNIZCA_GEMINI": "Gemini gördü, çıkarımda yok",
+    "HATA": "Gemini hatası",
+}
+GEMINI_COLORS = {"UYUMLU": "PASS", "YALNIZCA_PDF_CIKARIMI": "NEEDS_REVIEW", "YALNIZCA_GEMINI": "NEEDS_REVIEW", "HATA": "INFO"}
+
+
+def _gemini_df(report) -> pd.DataFrame:
+    return pd.DataFrame(
+        [
+            {
+                "Sayfa": c.page,
+                "Birim": c.unit_id or "",
+                "Tür": gemini_verify.KIND_TR.get(c.kind, c.kind),
+                "Durum": GEMINI_STATUS_TR.get(c.status, c.status),
+                "PDF çıkarımı": c.extracted or "",
+                "Gemini'nin gördüğü (yalnızca inceleme için)": c.gemini or "",
+                "_renk": GEMINI_COLORS.get(c.status, "INFO"),
+            }
+            for c in report.checks
+        ],
+        columns=["Sayfa", "Birim", "Tür", "Durum", "PDF çıkarımı", "Gemini'nin gördüğü (yalnızca inceleme için)", "_renk"],
+    )
+
+
+with tab_gemini:
+    res = st.session_state.get("res")
+    if res is None:
+        st.info("Önce **1. PDF Analizi** sekmesinde bir PDF analiz edin.")
+    else:
+        st.caption(
+            "İsteğe bağlıdır. Seçilen temaların sayfa görüntüleri **tarayıcınızdan doğrudan** Google Gemini API'sine "
+            "gönderilir; API anahtarınız yalnızca tarayıcınızda kalır, sunucuya gönderilmez ve kaydedilmez. Gemini'den "
+            "sayfadaki tema başlıklarını, bölüm başlıklarını, öğrenme çıktısı ve uygulama bloğu kodlarını listelemesi "
+            "istenir; bu liste PDF'den çıkarılan yapıyla karşılaştırılır, uyuşmayan yerler **İnceleme gerekli** olur. "
+            "Gemini'nin yazdığı metin çıkarıma, Excel'e veya karşılaştırmaya **girmez**."
+        )
+        units = {u.id: f"{u.id} — {(u.context.text + ' | ') if u.context else ''}{u.title.text}".replace("\n", " ") for u in res.units}
+        chosen = st.multiselect("Doğrulanacak temalar", list(units), default=list(units)[:1], format_func=units.get)
+        n_pages = len(gemini_verify.unit_pages(res, chosen))
+        st.caption(f"{n_pages} sayfa (her sayfa ayrı bir Gemini isteği).")
+        if st.button("Sayfaları hazırla", disabled=not chosen):
+            with st.spinner("Sayfa görüntüleri hazırlanıyor…"):
+                pages = gemini_verify.unit_pages(res, chosen)
+                st.session_state["gv_payload"] = {
+                    "run_id": hashlib.sha1(f"{st.session_state['pdf_digest']}|{sorted(pages)}|{os.urandom(4).hex()}".encode()).hexdigest()[:12],
+                    "units": chosen,
+                    "pages": gemini_verify.page_images(res.source, pages),
+                    "prompt": gemini_verify.PROMPT,
+                    "schema": gemini_verify.RESPONSE_SCHEMA,
+                    "model": gemini_verify.DEFAULT_MODEL,
+                }
+        payload = st.session_state.get("gv_payload")
+        browser = gemini_browser(payload)
+        out = browser.result if browser is not None else None
+        if payload and out and out.get("run_id") == payload["run_id"] and st.session_state.get("gv_done") != payload["run_id"]:
+            results = {int(k): v for k, v in (out.get("results") or {}).items()}
+            st.session_state["gemini"] = gemini_verify.build_report(res, out.get("model") or "", payload["units"], results)
+            st.session_state["gv_done"] = payload["run_id"]
+
+        report = st.session_state.get("gemini")
+        if report is not None:
+            gdf = _gemini_df(report)
+            counts = gdf["Durum"].value_counts() if not gdf.empty else {}
+            for col, code in zip(st.columns(4), GEMINI_STATUS_TR):
+                col.metric(GEMINI_STATUS_TR[code], int(counts.get(GEMINI_STATUS_TR[code], 0)))
+            only_diff = st.checkbox("Yalnızca uyuşmayanları göster", value=True)
+            view = gdf[gdf["Durum"] != GEMINI_STATUS_TR["UYUMLU"]] if only_diff else gdf
+            st.caption(f"Model: {report.model} — {len(report.pages)} sayfa, {len(view)} satır gösteriliyor")
+            st.dataframe(
+                style_by(view, "_renk"),
+                hide_index=True,
+                width="stretch",
+                height=460,
+                column_config={
+                    "_renk": None,
+                    "PDF çıkarımı": st.column_config.TextColumn("PDF çıkarımı", width="large"),
+                    "Gemini'nin gördüğü (yalnızca inceleme için)": st.column_config.TextColumn("Gemini'nin gördüğü (yalnızca inceleme için)", width="large"),
+                },
+            )
+            buf = io.BytesIO()
+            gdf.drop(columns=["_renk"]).to_excel(buf, index=False, sheet_name="Gemini Doğrulama")
+            st.download_button(
+                "Gemini doğrulama raporunu indir (Excel)",
+                data=buf.getvalue(),
+                file_name=f"{os.path.splitext(st.session_state['pdf_name'])[0]}_gemini_dogrulama.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+
+# ---------------------------------------------------------------- 4. Excel Karşılaştırma
 
 with tab_cmp:
     res = st.session_state.get("res")
@@ -260,7 +381,7 @@ with tab_cmp:
             st.caption(f"{len(view)} / {len(cmp_df)} satır gösteriliyor")
             st.dataframe(style_by(view, "Durum"), hide_index=True, width="stretch", height=560, column_config=col_config(view))
 
-# ---------------------------------------------------------------- 4. Rapor
+# ---------------------------------------------------------------- 5. Rapor
 
 with tab_report:
     res = st.session_state.get("res")
@@ -271,8 +392,8 @@ with tab_report:
         fdf = findings_df(res)
         st.write(
             f"**{st.session_state['pdf_name']}** — genel durum: **{STATUS_TR.get(res.status.value)}**, "
-            f"tema/ünite {len(res.units)} / {res.expected_unit_count}, "
-            f"öğrenme çıktısı {res.extracted_lo_total} / {res.expected_lo_total}."
+            f"tema/ünite {len(res.units)}, "
+            f"öğrenme çıktısı {res.extracted_lo_total} (süre tablosunda beklenen: {_expected(res.expected_lo_total)})."
         )
         if not fdf.empty:
             st.dataframe(
@@ -282,7 +403,7 @@ with tab_report:
             )
         cmp_df = st.session_state.get("cmp")
         if cmp_df is None:
-            st.info("Karşılaştırma raporu için **3. Excel Karşılaştırma** sekmesinde sistem Excel'ini karşılaştırın.")
+            st.info("Karşılaştırma raporu için **4. Excel Karşılaştırma** sekmesinde sistem Excel'ini karşılaştırın.")
         else:
             st.subheader("Excel karşılaştırması")
             summ = summary(cmp_df)

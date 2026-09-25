@@ -144,8 +144,8 @@ class LabelDef(BaseModel):
 
 
 class ProgramSchema(BaseModel):
-    structure_pages: list[int]
-    structure_heading: TextField
+    structure_pages: list[int]  # boş: yapı/tanıtım sayfası bulunamadı, yapı tema sayfalarından öğrenildi
+    structure_heading: Optional[TextField]
     unit_keyword: str
     unit_title_color: int
     unit_title_colors: list[int] = Field(default_factory=list)  # başlık rengi + ona çok yakın tonlar
@@ -156,7 +156,7 @@ class ProgramSchema(BaseModel):
     lo_prefix: str
     lo_segments: int
     lo_segment_types: list[str] = Field(default_factory=list)  # "n": sayı, "a": harf (ör. ARN.5.1.D)
-    lo_example: TextField
+    lo_example: Optional[TextField]
     data_start_page: int
 
 
@@ -231,6 +231,7 @@ class CodeCheck(BaseModel):
     used: list[str]  # bu kategoriye eşleşen kullanılan kodlar (raw normalize)
     matched: list[str]
     declared_not_used: list[str]
+    used_not_declared: list[str] = Field(default_factory=list)  # bu kategoriye önek/numarayla ait, tanımsız kullanılan kodlar
 
 
 class UnitReport(BaseModel):
