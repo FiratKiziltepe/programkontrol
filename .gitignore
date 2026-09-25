@@ -1,0 +1,13 @@
+# Örnek PDF'ler ve sistem Excel'i repoya eklenmez
+samples/
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Üretilmiş çıktılar
+curriculum_checker/temp/
+
+# Office geçici dosyaları
+~$*
