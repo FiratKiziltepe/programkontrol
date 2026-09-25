@@ -125,9 +125,12 @@ def test_comparison_real_differences(cmp):
     text_diffs = t5[(t5["Durum"] == METIN_FARKLI) & ~t5["Açıklama"].str.contains("ad farklı")]
     # PDF'de "ç) ... yansıtır" (noktasız), sistem Excel'inde "yansıtır."
     assert list(text_diffs["Öğrenme çıktısı"]) == ["ARN.5.4.D"] and list(text_diffs["Öğe"]) == ["ç)"]
-    # kod aynı, ad farklı (sistem adları "... Becerisi"; "Okuryazarlıği" yazım farkı)
+    # kod aynı, ad farklı: yalnızca "Okuryazarlıği" yazım farkı. Sistem adlarının sonundaki "Becerisi" eki
+    # (kullanıcı kararı) yok sayılır ve not düşülür; başka ad farkı yok sayılmaz.
     names = t5[t5["Açıklama"] == "Kod aynı; ad farklı"]
-    assert "OB5" in set(names["Öğe"]) and "KB2.2" in set(names["Öğe"])
+    assert set(names["Öğe"]) == {"OB5"}
+    suffixed = t5[t5["Açıklama"] == 'Adın sonundaki "Becerisi" eki yok sayıldı']
+    assert "KB2.2" in set(suffixed["Öğe"]) and set(suffixed["Durum"]) <= {AYNI, BICIM}
     # sistem Excel'inde aynı hücrede tekrarlı kod (D12.1 iki kez)
     dup = t5[t5["Durum"] == INCELEME]
     assert set(dup["Öğe"]) == {"D12.1"} and len(dup) == 3

@@ -10,6 +10,8 @@ Akış:
                        Gemini metni çıkarıma girmez.
 4. Excel Karşılaştırma – sistemden indirilen Excel yüklenir, iki yönlü karşılaştırılır.
 5. Rapor             – özet ve indirilebilir rapor.
+6. Tablo Karşılaştırma – sistem Excel'i ↔ PDF Excel'i hücre hücre yan yana; eksikler PDF metin katmanından,
+                       isteğe bağlı Gemini ile (PDF metin katmanında doğrulanarak) tamamlanır; inceleme raporu (Word).
 """
 from __future__ import annotations
 
@@ -38,6 +40,7 @@ from excel_export import (
 from excel_import import read_system_excel
 import gemini_verify
 from gemini_component import gemini_browser
+import grid_tab
 from schema_detect import SchemaError
 from validators import analyze_pdf
 
@@ -126,9 +129,9 @@ with st.sidebar:
     if st.session_state.get("cmp") is not None:
         st.info(f"Karşılaştırılan Excel: **{st.session_state['xl_name']}**")
 
-tab_pdf, tab_checks, tab_gemini, tab_cmp, tab_report = st.tabs(
+tab_pdf, tab_checks, tab_gemini, tab_cmp, tab_report, tab_grid = st.tabs(
     # "1." Markdown'da numaralı liste sayılmasın diye kaçışlanır
-    ["1\\. PDF Analizi", "2\\. PDF Kontrolleri", "3\\. Gemini Doğrulama", "4\\. Excel Karşılaştırma", "5\\. Rapor"]
+    ["1\\. PDF Analizi", "2\\. PDF Kontrolleri", "3\\. Gemini Doğrulama", "4\\. Excel Karşılaştırma", "5\\. Rapor", "6\\. Tablo Karşılaştırma"]
 )
 
 # ---------------------------------------------------------------- 1. PDF Analizi
@@ -420,3 +423,12 @@ with tab_report:
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 type="primary",
             )
+
+# ---------------------------------------------------------------- 6. Tablo Karşılaştırma
+
+with tab_grid:
+    res = st.session_state.get("res")
+    if res is None:
+        st.info("Önce **1. PDF Analizi** sekmesinde bir PDF analiz edin.")
+    else:
+        grid_tab.render(res, st.session_state["pdf_name"], st.session_state["pdf_digest"])

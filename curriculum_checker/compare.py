@@ -60,6 +60,19 @@ COLUMNS = {
 }
 
 
+# Kullanıcı kararı: sistemdeki kod adlarının sonuna eklenen "Becerisi" (ör. "KB2.2. Gözlemleme Becerisi" ~ PDF
+# "KB2.2. Gözlemleme") ad farkı sayılmaz. YALNIZCA bu ek için geçerlidir; diğer tüm ad farkları fark olarak kalır.
+IGNORED_NAME_SUFFIX = "Becerisi"
+_SUFFIX_RE = re.compile(r"\s+becerisi\s*$")
+
+
+def without_name_suffix(t: str) -> str | None:
+    """Ad "Becerisi" ile bitiyorsa eksiz hali; bitmiyorsa None."""
+    t = t.rstrip()
+    m = _SUFFIX_RE.search(tr_lower(t))
+    return t[: m.start()] if m else None
+
+
 def _ws(t: str) -> str:
     return re.sub(r"\s+", " ", t or "").strip()
 
@@ -344,7 +357,14 @@ class Comparer:
                 continue
             pdf_name = re.sub(rf"^\s*{re.escape(entry.text.split()[0])}\s*", "", entry.text) if entry.text.split() else ""
             st = text_status(pdf_name, name)
-            self.add(st, u, lo_code, header, c.normalized, entry.text, line, cell, pages, "" if st == AYNI else "Kod aynı; ad farklı" if st == METIN_FARKLI else "")
+            note = ""
+            if st == METIN_FARKLI:
+                # yalnızca bir taraftaki sondaki "Becerisi" eki yok sayılır (kullanıcı kararı)
+                x_cut, p_cut = without_name_suffix(name), without_name_suffix(pdf_name)
+                st2 = text_status(pdf_name, x_cut) if (x_cut is not None and p_cut is None) else text_status(p_cut, name) if (p_cut is not None and x_cut is None) else st
+                if st2 != METIN_FARKLI:
+                    st, note = st2, f'Adın sonundaki "{IGNORED_NAME_SUFFIX}" eki yok sayıldı'
+            self.add(st, u, lo_code, header, c.normalized, entry.text, line, cell, pages, note or ("Kod aynı; ad farklı" if st == METIN_FARKLI else ""))
         for k, (line, code, name) in xl.items():
             if k not in pk:
                 self.add(EXCEL_VAR, u, lo_code, header, code, "", line, cell, "")
