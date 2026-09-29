@@ -9,6 +9,17 @@ import streamlit as st
 
 HTML = """
 <div class="gx">
+  <div class="gx-bar">
+    <div class="gx-view" role="group" aria-label="Görünüm">
+      <button type="button" data-v="h" title="Her satır bir süreç bileşeni; alanlar sütun sütun">Yatay tablo</button>
+      <button type="button" data-v="v" title="Her tema bir blok; alanlar alt alta, Sistem | PDF yan yana; öğrenme çıktıları ve süreç bileşenleri tek hücrede">Dikey (alan alan)</button>
+    </div>
+    <label class="gx-check gx-vonly"><input type="checkbox"> Yalnızca farklı alanlar</label>
+    <span class="gx-sp"></span>
+    <button type="button" class="gx-btn gx-full" title="Tam ekran (Esc ile çıkılır)">⛶ Tam ekran</button>
+    <button type="button" class="gx-btn gx-dl" data-img="0" title="Geçerli görünüm ve filtrelerle, çevrimdışı açılabilen HTML dosyası (PDF sayfaları olmadan)">⤓ HTML indir (resimsiz)</button>
+    <button type="button" class="gx-btn gx-dl" data-img="1" title="Ayrıca PDF sayfaları gömülür: dosyada “PDF s.” bağlantısına tıklayınca sayfa, yer sarı işaretli açılır (dosya büyür)">⤓ HTML indir (resimli)</button>
+  </div>
   <div class="gx-toolbar">
     <div class="gx-seg"></div>
     <input class="gx-search" type="search" placeholder="Ara: öğrenme çıktısı kodu, tema veya metin…" aria-label="Ara">
@@ -25,10 +36,19 @@ HTML = """
     <span><b class="bd bd-tl">PDF✓</b> PDF metin katmanından tamamlandı</span>
     <span><b class="bd bd-gm">Gemini✓</b> Gemini buldu, PDF'de doğrulandı</span>
     <span><b class="bd bd-gu">Gemini?</b> Gemini önerisi doğrulanamadı</span>
-    <span class="gx-hint">Satıra tıklayınca tüm alanlar açılır · tabloyu yatay kaydırın</span>
+    <span class="gx-hint"></span>
   </div>
-  <div class="gx-scroll" tabindex="0"><table class="gx-table"><thead></thead><tbody></tbody></table></div>
+  <div class="gx-scroll" tabindex="0"><table class="gx-table"><thead></thead><tbody></tbody></table><div class="gx-vert"></div></div>
   <div class="gx-pager"></div>
+  <div class="gx-pv" hidden>
+    <div class="gx-pvd" role="dialog" aria-modal="true">
+      <header class="gx-mhead">
+        <div><div class="gx-mtitle gx-pvt"></div><div class="gx-msub gx-pvs"></div></div>
+        <div class="gx-mnav"><button class="gx-pvx" type="button" title="Kapat (Esc)">✕</button></div>
+      </header>
+      <div class="gx-pvb"></div>
+    </div>
+  </div>
   <div class="gx-modal" hidden>
     <div class="gx-dialog" role="dialog" aria-modal="true">
       <header class="gx-mhead">
@@ -130,6 +150,79 @@ td.st-BİÇİM { background: var(--fmt) !important; }
 .fld-n { padding: .4rem .75rem; font-size: 12px; border-top: 1px dashed var(--bd); opacity: .9; }
 .fld-g { padding: .4rem .75rem; font-size: 12px; background: rgba(245,166,35,.12); border-top: 1px dashed var(--bd); white-space: pre-wrap; }
 del { background: rgba(229,72,77,.22); text-decoration: line-through; } ins { background: rgba(46,160,67,.25); text-decoration: none; }
+/* görünüm seçimi, tam ekran, indirme */
+.gx-bar { display: flex; gap: .5rem; flex-wrap: wrap; align-items: center; margin-bottom: .5rem; }
+.gx-sp { flex: 1 1 auto; }
+.gx-view { display: inline-flex; border: 1px solid var(--bd); border-radius: .5rem; overflow: hidden; }
+.gx-view button { border: 0; background: var(--bg); color: inherit; font: inherit; padding: .35rem .8rem; cursor: pointer; }
+.gx-view button + button { border-left: 1px solid var(--bd); }
+.gx-view button[aria-pressed="true"] { background: var(--st-primary-color); color: #fff; }
+.gx-btn { border: 1px solid var(--bd); background: var(--bg); color: inherit; font: inherit; border-radius: .5rem; padding: .35rem .8rem; cursor: pointer; white-space: nowrap; }
+.gx-btn:hover, .gx-view button:not([aria-pressed="true"]):hover { background: var(--bg2); }
+.gx-vonly[hidden] { display: none; }
+.gx.is-full { position: fixed; inset: 0; z-index: 1000000; background: var(--bg); padding: 1rem; display: flex; flex-direction: column; overflow: auto; box-sizing: border-box; }
+.gx.is-full .gx-scroll { max-height: none; flex: 1 0 24rem; min-height: 0; }
+.gx.is-full .gx-cols, .gx.is-full .gx-legend, .gx.is-full .gx-pager { flex: 0 0 auto; }
+.gx-btn:disabled { opacity: .6; cursor: progress; }
+.gx-btn[hidden] { display: none; }
+a.pg { color: var(--st-primary-color); text-decoration: underline; cursor: pointer; }
+/* PDF sayfa görüntüleyici (resimli HTML): sarı işaret, uygulamadaki diyalogla aynı renk */
+.gx-pv { position: fixed; inset: 0; background: rgba(0,0,0,.5); z-index: 1000002; display: flex; align-items: center; justify-content: center; padding: 1rem; }
+.gx-pv[hidden] { display: none; }
+.gx-pvd { background: var(--bg); color: var(--st-text-color); width: min(1000px, 100%); max-height: 94vh; border-radius: .8rem; display: flex; flex-direction: column; box-shadow: 0 20px 60px rgba(0,0,0,.3); }
+.gx-pvb { overflow: auto; padding: .5rem 1.25rem 1.25rem; }
+.gx-pvb .pv-n { background: rgba(245,166,35,.15); border-radius: .4rem; padding: .5rem .75rem; margin: .5rem 0; }
+.gx-pvb .pv-h { font-weight: 600; margin: .75rem 0 .35rem; }
+.pv-w { position: relative; border: 1px solid var(--bd); }
+.pv-w img { display: block; width: 100%; height: auto; }
+.pv-w i { position: absolute; background: rgba(255,224,26,.42); outline: 1px solid rgb(230,158,0); }
+/* dikey görünüm: her öğrenme çıktısı bir blok; alanlar alt alta, Sistem | PDF yan yana */
+.gx-scroll.v .gx-table, .gx-scroll:not(.v) .gx-vert { display: none; }
+.gx-vert { padding: .6rem; display: flex; flex-direction: column; gap: .8rem; --vcols: minmax(9rem, 14rem) minmax(0, 1fr) minmax(0, 1fr); }
+.vb { border: 1px solid var(--bd); border-radius: .6rem; overflow: clip; }
+.vb-h, .vr { display: grid; grid-template-columns: var(--vcols); }
+.vb-h { position: sticky; top: 0; z-index: 1; background: var(--bg2); border-bottom: 1px solid var(--bd); font-weight: 600; }
+.vb-h > div { padding: .5rem .75rem; }
+.vb-h > div + div { border-left: 1px solid var(--bd); }
+.vb-h .vb-id { display: flex; flex-direction: column; gap: .2rem; }
+.vb-h .vb-t { font-weight: 400; font-size: 12px; opacity: .8; }
+.vb-h .vb-tools { display: flex; gap: .4rem; align-items: center; flex-wrap: wrap; font-weight: 400; }
+.vb-h .sys { color: #0969da; } .vb-h .pdf { color: #8250df; }
+.vr + .vr { border-top: 1px solid var(--bd); }
+.vr > div { padding: .5rem .75rem; min-width: 0; }
+.vr > .vs { border-left: 1px solid var(--bd); white-space: pre-wrap; word-break: break-word; line-height: 1.45; }
+.vr .vf { font-weight: 600; font-size: 12px; }
+.vr .vf .vfm { margin-top: .3rem; display: flex; flex-wrap: wrap; gap: .2rem; align-items: center; }
+.vr .vf .meta { margin-top: .25rem; font-weight: 400; opacity: .7; font-size: 11px; }
+.vr .vs .lab { display: none; }
+.vr.st-FARKLI > .vs { background: var(--diff); } .vr.st-YALNIZCA_SİSTEM > .vs, .vr.st-YALNIZCA_PDF > .vs { background: var(--only); }
+.vr.st-BİÇİM > .vs { background: var(--fmt); }
+.vr.st-FARKLI > .vf { box-shadow: inset 3px 0 0 #cf222e; } .vr.st-YALNIZCA_SİSTEM > .vf, .vr.st-YALNIZCA_PDF > .vf { box-shadow: inset 3px 0 0 #bf8700; }
+.vr > .vn { grid-column: 1 / -1; border-top: 1px dashed var(--bd); font-size: 12px; opacity: .9; white-space: pre-wrap; }
+.vr > .vn.g { background: rgba(245,166,35,.12); opacity: 1; }
+.vr-c > .vsegs { grid-column: 2 / -1; display: flex; flex-direction: column; min-width: 0; padding: 0; border-left: 1px solid var(--bd); }
+.vsg { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+.vsg + .vsg { border-top: 1px dashed var(--bd); }
+.vsg > div { padding: .45rem .75rem; min-width: 0; }
+.vsg > .vsg-h { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: .3rem; align-items: center; padding-bottom: 0; font-size: 12px; }
+.vsg-h .meta { opacity: .7; font-size: 11px; }
+.vsg > .vs { white-space: pre-wrap; word-break: break-word; line-height: 1.45; }
+.vsg > .vs + .vs { border-left: 1px solid var(--bd); }
+.vsg.st-FARKLI > .vs { background: var(--diff); } .vsg.st-YALNIZCA_SİSTEM > .vs, .vsg.st-YALNIZCA_PDF > .vs { background: var(--only); }
+.vsg.st-BİÇİM > .vs { background: var(--fmt); }
+.vsg > .vn { grid-column: 1 / -1; border-top: 1px dashed var(--bd); font-size: 12px; white-space: pre-wrap; }
+.vsg > .vn.g { background: rgba(245,166,35,.12); }
+.vtag { border: 1px solid var(--bd); background: var(--bg2); color: inherit; font: inherit; font-weight: 600; border-radius: .35rem; padding: 0 .4rem; cursor: pointer; }
+.vtag:hover { border-color: var(--st-primary-color); }
+@media (max-width: 720px) {
+  .gx-vert { --vcols: 1fr; padding: .4rem; }
+  .vb-h > div.sys, .vb-h > div.pdf { display: none; }
+  .vr > .vs { border-left: 0; border-top: 1px solid var(--bd); }
+  .vr .vs .lab { display: block; }
+  .vr-c > .vsegs { grid-column: 1 / -1; border-left: 0; border-top: 1px solid var(--bd); }
+  .vsg { grid-template-columns: 1fr; }
+  .vsg > .vs + .vs { border-left: 0; border-top: 1px solid var(--bd); }
+}
 @media (max-width: 720px) {
   .gx-hint { display: none; }
   .gx-dialog { max-height: 100vh; height: 100%; border-radius: 0; }
@@ -170,9 +263,15 @@ export default function (component) {
   const { data, parentElement } = component;
   const root = parentElement.querySelector(".gx");
   const D = data || { headers: [], rows: [] };
-  const S = root.__gx || (root.__gx = { sel: new Set(DIFF), flags: new Set(), fields: new Set(), q: "", fmt: true, hidden: new Set(), page: 0, open: -1, onlyDiff: false });
+  // D.init: indirilen HTML dosyası, indirme anındaki görünüm ve filtrelerle açılır
+  const I = D.init || {};
+  const S = root.__gx || (root.__gx = {
+    sel: new Set(I.sel || DIFF), flags: new Set(I.flags || []), fields: new Set(I.fields || []), q: I.q || "",
+    fmt: I.fmt ?? true, hidden: new Set(I.hidden || []), page: 0, open: -1, onlyDiff: false, view: I.view || "h", vOnly: !!I.vOnly,
+  });
   const headers = D.headers || [];
   const levels = D.levels || {};
+  const doc = root.ownerDocument;
 
   const cellsOf = (r, all) => {
     const out = {};
@@ -209,16 +308,25 @@ export default function (component) {
 
   // araç çubuğu: filtre çipleri
   const seg = root.querySelector(".gx-seg");
+  // Dikey görünümde sayılar satır değil tekil hücredir: tema düzeyindeki bir fark her öğrenme çıktısında tekrar sayılmaz.
+  const ALL_CELLS = [
+    ...Object.values(D.theme || {}).flatMap((cs) => Object.entries(cs)),
+    ...Object.values(D.lo || {}).flatMap((cs) => Object.entries(cs)),
+    ...Object.values(D.comp || {}).map((c) => ["Süreç Bileşeni", c]),
+  ];
   function renderFilters() {
     const rows = D.rows || [];
     const statuses = STATUS_ORDER.filter((s) => !(S.fmt && s === "BİÇİM"));
+    const vcells = ALL_CELLS.filter(([h]) => !S.fields.size || S.fields.has(h)).map(([, c]) => c);
+    const nStatus = (s) => (S.view === "v" ? vcells.filter((c) => eff(c.st) === s).length : rows.filter((r) => rowHas(r, s)).length);
+    const nFlag = (f) => (S.view === "v" ? vcells.filter(f).length : rows.filter((r) => fieldCells(r).some(f)).length);
     const chip = (kind, key, label, n, extra = "") =>
       `<button type="button" class="chip ${extra}" data-k="${kind}" data-v="${esc(key)}" aria-pressed="${kind === "s" ? S.sel.has(key) : kind === "f" ? S.flags.has(key) : S.fields.has(key)}">${esc(label)}${n === null ? "" : `<span class="ct">${n}</span>`}</button>`;
     seg.innerHTML =
       `<div class="fg"><span class="fl">Durum</span>` +
-      statuses.map((s) => chip("s", s, LABEL[s], rows.filter((r) => rowHas(r, s)).length, `c-${s}`)).join("") +
+      statuses.map((s) => chip("s", s, LABEL[s], nStatus(s), `c-${s}`)).join("") +
       `<span class="quick"><button type="button" class="mini" data-q="diff">Farklar</button><button type="button" class="mini" data-q="all">Tümü</button><button type="button" class="mini" data-q="none">Temizle</button></span></div>` +
-      `<div class="fg"><span class="fl">Ek</span>` + FLAGS.map(([k, t, f]) => chip("f", k, t, rows.filter((r) => fieldCells(r).some(f)).length)).join("") +
+      `<div class="fg"><span class="fl">Ek</span>` + FLAGS.map(([k, t, f]) => chip("f", k, t, nFlag(f))).join("") +
       `<details class="fields"${S.fields.size ? " open" : ""}><summary>Alan filtresi${S.fields.size ? ` (${S.fields.size} seçili)` : " (tüm alanlar)"}</summary><div class="fg">` +
       headers.map((h) => chip("h", h, h, null)).join("") + `</div></details></div>`;
     seg.querySelectorAll("button.chip").forEach((b) => (b.onclick = () => {
@@ -241,6 +349,125 @@ export default function (component) {
   chips.innerHTML = headers.map((h, i) => `<label><input type="checkbox" data-i="${i}" ${S.hidden.has(h) ? "" : "checked"}> ${esc(h)}</label>`).join("");
   chips.querySelectorAll("input").forEach((x) => (x.onchange = () => { const h = headers[+x.dataset.i]; x.checked ? S.hidden.delete(h) : S.hidden.add(h); render(false); }));
 
+  // görünüm seçimi (yatay tablo / dikey)
+  const vonly = root.querySelector(".gx-vonly");
+  const vonlyBox = vonly.querySelector("input");
+  vonlyBox.checked = S.vOnly;
+  vonlyBox.onchange = () => { S.vOnly = vonlyBox.checked; render(false); };
+  root.querySelectorAll(".gx-view button").forEach((b) => (b.onclick = () => { if (S.view !== b.dataset.v) { S.view = b.dataset.v; S.page = 0; render(); } }));
+  function applyView() {
+    root.querySelectorAll(".gx-view button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.v === S.view)));
+    root.querySelector(".gx-scroll").classList.toggle("v", S.view === "v");
+    vonly.hidden = S.view !== "v";
+    root.querySelector(".gx-hint").textContent = S.view === "v"
+      ? "Her tema bir blok · sayılar tekil alan (hücre) sayısıdır · öğe etiketine tıklayınca o satır açılır"
+      : "Satıra tıklayınca tüm alanlar açılır · tabloyu yatay kaydırın";
+  }
+
+  // tam ekran: Fullscreen API varsa gerçek tam ekran, yoksa pencereyi kaplayan katman
+  const fullBtn = root.querySelector(".gx-full");
+  const rootNode = root.getRootNode();
+  const realFull = () => rootNode.fullscreenElement === root;
+  function setFull(on) {
+    root.classList.toggle("is-full", on);
+    fullBtn.textContent = on ? "✕ Tam ekrandan çık" : "⛶ Tam ekran";
+    if (on && root.requestFullscreen && !realFull()) root.requestFullscreen().catch(() => {});
+    if (!on && realFull()) doc.exitFullscreen().catch(() => {});
+  }
+  fullBtn.textContent = root.classList.contains("is-full") ? "✕ Tam ekrandan çık" : "⛶ Tam ekran";
+  fullBtn.onclick = () => setFull(!root.classList.contains("is-full"));
+  if (!root.__gxFull) {
+    root.__gxFull = true;
+    doc.addEventListener("fullscreenchange", () => { if (!realFull() && root.classList.contains("is-full")) setFull(false); });
+  }
+
+  // HTML indir: bu bileşenin kendisi + veri + geçerli görünüm/filtreler tek, çevrimdışı açılan dosyada.
+  // Resimli: PDF sayfaları (bir kez) ve hücrelerin sarı işaret kutuları Python'dan istenir, gelince dosyaya gömülür.
+  const X = D.export;
+  const { setTriggerValue } = component;
+  function download(pdf) {
+    const { export: _x, init: _i, pdf_export: _p, ...data } = D;
+    if (pdf) data.pdf = { pages: pdf.pages, locs: pdf.locs };
+    data.init = { sel: [...S.sel], flags: [...S.flags], fields: [...S.fields], q: S.q, fmt: S.fmt, hidden: [...S.hidden], view: S.view, vOnly: S.vOnly };
+    const json = JSON.stringify(data).replace(/</g, "\\u003c");
+    const html = `<!doctype html><html lang="tr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">` +
+      `<title>${esc(X.title)}</title><style>${X.page_css}\n${X.css}</style></head><body>` +
+      `<h1 class="gx-doc-h">${esc(X.title)}</h1><p class="gx-doc-s">${esc(X.subtitle)} · ${esc(new Date().toLocaleString("tr-TR"))}` +
+      `${pdf ? " · “PDF s.” bağlantıları sayfayı sarı işaretli açar" : ""}</p>` +
+      `${X.html}<script type="application/json" id="gx-data">${json}<\/script>` +
+      `<script type="module">${X.js}\ngxMain({ data: JSON.parse(document.getElementById("gx-data").textContent), parentElement: document.body });<\/script></body></html>`;
+    const a = doc.createElement("a");
+    a.href = URL.createObjectURL(new Blob([html], { type: "text/html;charset=utf-8" }));
+    a.download = `${X.file_name}${pdf ? "_resimli" : ""}.html`;
+    doc.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+  }
+  const IMG_LABEL = "⤓ HTML indir (resimli)", IMG_BUSY = "⏳ Sayfalar hazırlanıyor…";
+  root.querySelectorAll(".gx-dl").forEach((b) => {
+    b.hidden = !X;
+    const img = b.dataset.img === "1";
+    if (img) { b.disabled = !!S.pendingExport; b.textContent = S.pendingExport ? IMG_BUSY : IMG_LABEL; }
+    if (X) b.onclick = () => {
+      if (!img) return download(null);
+      S.pendingExport = Math.random().toString(36).slice(2);
+      b.disabled = true;
+      b.textContent = IMG_BUSY;
+      setTriggerValue("export_images", { token: S.pendingExport });
+    };
+  });
+  if (X && D.pdf_export && S.pendingExport && D.pdf_export.token === S.pendingExport) {
+    S.pendingExport = null;
+    download(D.pdf_export);
+    root.querySelectorAll('.gx-dl[data-img="1"]').forEach((b) => { b.disabled = false; b.textContent = IMG_LABEL; });
+  }
+
+  // "PDF s.X": uygulamada Python diyaloğu (sayfa + sarı işaret); resimli HTML'de gömülü sayfa görüntüleyici
+  const inApp = typeof setTriggerValue === "function" && !!X;
+  const PDF = D.pdf || null;
+  function pageRef(c) {
+    if (!c.pg || !c.pg.length) return "";
+    const txt = `PDF s.${c.pg.join(", ")}`;
+    const can = c.k && (inApp || (PDF && PDF.locs && PDF.locs[c.k]));
+    return can ? `<a class="pg" href="#" data-k="${esc(c.k)}" title="PDF'de göster (sarı işaretli)">${txt}</a>` : txt;
+  }
+  const pv = root.querySelector(".gx-pv");
+  const closePv = () => { pv.hidden = true; };
+  root.querySelector(".gx-pvx").onclick = closePv;
+  pv.onclick = (e) => { if (e.target === pv) closePv(); };
+  function openPv(k) {
+    const L = PDF.locs[k];
+    root.querySelector(".gx-pvt").textContent = L.t || "PDF";
+    root.querySelector(".gx-pvs").textContent = L.pg.map((p) => `s.${p}` + ((L.r[p] || []).length ? ` (${L.r[p].length} işaret)` : "")).join(" · ");
+    const body = root.querySelector(".gx-pvb");
+    body.innerHTML = (L.n ? `<div class="pv-n">${esc(L.n)}</div>` : "") + L.pg.map((p) =>
+      `<div class="pv-h">Sayfa ${p}${(L.r[p] || []).length ? "" : " · işaret yok"}</div><div class="pv-w"><img alt="Sayfa ${p}" src="data:image/jpeg;base64,${PDF.pages[p] || ""}">` +
+      (L.r[p] || []).map((r) => `<i style="left:${r[0] * 100}%;top:${r[1] * 100}%;width:${(r[2] - r[0]) * 100}%;height:${(r[3] - r[1]) * 100}%"></i>`).join("") + `</div>`).join("");
+    pv.hidden = false;
+    body.scrollTop = 0;
+    const first = body.querySelector(".pv-w i");
+    if (first) {
+      const img = first.parentElement.querySelector("img");
+      const go = () => first.scrollIntoView({ block: "center" });
+      img.complete ? go() : (img.onload = go);
+    }
+    root.querySelector(".gx-pvx").focus();
+  }
+  root.__gxCtx = { inApp, PDF, setTriggerValue, openPv };
+  if (!root.__gxPg) {
+    root.__gxPg = true;
+    root.addEventListener("click", (e) => {
+      const a = e.target.closest && e.target.closest("a.pg");
+      if (!a) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const ctx = root.__gxCtx;
+      if (ctx.PDF && ctx.PDF.locs[a.dataset.k]) ctx.openPv(a.dataset.k);
+      else if (ctx.inApp) ctx.setTriggerValue("open_pdf", { k: a.dataset.k, n: Date.now() });
+    });
+  }
+
   function badges(c) {
     let b = "";
     if (c.src === "PDF metin katmanı") b += `<b class="bd bd-tl" title="Çıkarımda eksikti; PDF metin katmanında bulundu">PDF✓</b>`;
@@ -249,7 +476,102 @@ export default function (component) {
     return b;
   }
 
+  const STATUS_RANK = ["FARKLI", "YALNIZCA_SİSTEM", "YALNIZCA_PDF", "BİÇİM", "AYNI"];
+  const worst = (sts) => STATUS_RANK.find((s) => sts.has(s)) || "BOŞ";
+  const cellMeta = (c) => [c.a ? `Excel ${esc(c.a)}` : "", pageRef(c), c.src && c.src !== "çıkarım" ? esc(c.src) : ""].filter(Boolean);
+  const diffPair = (c, e) => {
+    const d = DIFF.has(e) && c.s && c.p ? wordDiff(c.s, c.p) : null;
+    return d || [esc(c.s), esc(c.p)];
+  };
+
+  function renderPager(n, unit, perPage) {
+    const pages = Math.max(1, Math.ceil(n / perPage));
+    const pager = root.querySelector(".gx-pager");
+    pager.innerHTML = `<span>${n} ${unit} · sayfa ${S.page + 1}/${pages}</span><button type="button" class="pp" ${S.page === 0 ? "disabled" : ""}>‹ Önceki</button><button type="button" class="pn" ${S.page >= pages - 1 ? "disabled" : ""}>Sonraki ›</button>`;
+    pager.querySelector(".pp").onclick = () => { S.page--; render(false); };
+    pager.querySelector(".pn").onclick = () => { S.page++; render(false); };
+  }
+
+  // Dikey görünüm: her TEMA bir blok. Alanlar sistem Excel'i sütun sırasıyla alt alta, Sistem | PDF yan yana.
+  // Tema düzeyindeki alanlar blokta bir kez; öğrenme çıktısı düzeyindeki alanlar (Öğrenme Çıktısı, kod sütunları) ve
+  // süreç bileşenleri tek hücrede toplanır. Toplanan hücrede her öğe kendi değeri ve durumuyla ayrı parça olarak durur
+  // (öğeler birleştirilip yeniden karşılaştırılmaz; fark hangi çıktıda ise orada görünür).
+  const themeRows = new Map();
+  for (const r of D.rows || []) (themeRows.get(r.t) || themeRows.set(r.t, []).get(r.t)).push(r);
+  const hasLo = (r) => r.l !== null && r.l !== undefined;
+  const VPAGE = 10;
+  function vField(label, e, st, head, sv, pv, c, meta) {
+    return `<div class="vr st-${e}"><div class="vf">${esc(label)}<div class="vfm"><span class="pill p-${st}">${LABEL[st]}</span>${head}</div>` +
+      (meta ? `<div class="meta">${meta}</div>` : "") + `</div>` +
+      `<div class="vs"><span class="lab sys">SİSTEM</span>${sv || '<span class="rep">(boş)</span>'}</div>` +
+      `<div class="vs"><span class="lab pdf">PDF</span>${pv || '<span class="rep">(boş)</span>'}</div>` + notes(c) + `</div>`;
+  }
+  const notes = (c) => (c.n ? `<div class="vn">${esc(c.n)}</div>` : "") +
+    (c.x ? `<div class="vn">Tamamlamadan önceki çıkarım: ${esc(c.x) || "(boş)"}</div>` : "") +
+    (c.g ? `<div class="vn g"><b>Gemini önerisi — PDF metin katmanında doğrulanamadı, tabloya alınmadı:</b>\n${esc(c.g)}</div>` : "");
+  function vCombined(label, segs) {
+    const e = worst(new Set(segs.map((x) => eff(x.c.st))));
+    if (S.vOnly && !DIFF.has(e)) return "";
+    const shown = S.vOnly ? segs.filter((x) => DIFF.has(eff(x.c.st))) : segs;
+    const nDiff = segs.filter((x) => DIFF.has(eff(x.c.st))).length;
+    const parts = shown.map((x) => {
+      const se = eff(x.c.st);
+      const [sv, pv] = diffPair(x.c, se);
+      const meta = cellMeta(x.c).join(" · ");
+      return `<div class="vsg st-${se}"><div class="vsg-h"><button type="button" class="vtag" data-id="${x.id}" title="Bu satırın tüm alanlarını aç">${esc(x.tag)}</button>` +
+        `<span class="pill p-${x.c.st}">${LABEL[x.c.st]}</span>${badges(x.c)}${meta ? `<span class="meta">${meta}</span>` : ""}</div>` +
+        `<div class="vs"><span class="lab sys">SİSTEM</span>${sv || '<span class="rep">(boş)</span>'}</div>` +
+        `<div class="vs"><span class="lab pdf">PDF</span>${pv || '<span class="rep">(boş)</span>'}</div>` + notes(x.c) + `</div>`;
+    }).join("");
+    const hidden = segs.length - shown.length;
+    return `<div class="vr vr-c st-${e}"><div class="vf">${esc(label)}<div class="vfm"><span class="pill p-${e}">${LABEL[e]}</span></div>` +
+      `<div class="meta">${segs.length} öğe${nDiff ? ` · ${nDiff} farklı` : ""}${hidden ? ` · ${hidden} farksız öğe gizli` : ""}</div></div>` +
+      `<div class="vsegs">${parts}</div></div>`;
+  }
+  function renderVert(rows) {
+    const cols = headers.filter((h) => !S.hidden.has(h));
+    const themes = [...new Set(rows.map((r) => r.t))];
+    const pages = Math.max(1, Math.ceil(themes.length / VPAGE));
+    S.page = Math.min(S.page, pages - 1);
+    const html = themes.slice(S.page * VPAGE, (S.page + 1) * VPAGE).map((t) => {
+      const trs = themeRows.get(t) || [];
+      const r0 = trs[0];
+      const los = trs.filter((r) => r.fl && hasLo(r));  // her öğrenme çıktısının ilk satırı
+      const tcells = (D.theme || {})[t] || {};
+      const sts = new Set();
+      const body = cols.map((h) => {
+        const lvl = levels[h];
+        if (lvl === "theme") {
+          const c = tcells[h];
+          if (!c) return "";
+          const e = eff(c.st);
+          sts.add(e);
+          if (S.vOnly && !DIFF.has(e)) return "";
+          const [sv, pv] = diffPair(c, e);
+          return vField(h, e, c.st, badges(c), sv, pv, c, cellMeta(c).join(" · "));
+        }
+        const segs = lvl === "component"
+          ? trs.filter((r) => (D.comp || {})[r.id]).map((r) => ({ tag: [r.lo, r.c].filter(Boolean).join(" · ") || `#${r.id + 1}`, id: r.id, c: D.comp[r.id] }))
+          : los.filter((r) => ((D.lo || {})[r.l] || {})[h]).map((r) => ({ tag: r.lo || `#${r.id + 1}`, id: r.id, c: D.lo[r.l][h] }));
+        if (!segs.length) return "";
+        segs.forEach((x) => sts.add(eff(x.c.st)));
+        return vCombined(h, segs);
+      }).join("");
+      const bst = worst(sts);
+      return `<section class="vb"><div class="vb-h"><div class="vb-id"><span>${esc(r0.tl || "(tema yok)")}</span>` +
+        `<span class="vb-t">${los.length} öğrenme çıktısı · ${trs.filter((r) => (D.comp || {})[r.id]).length} süreç bileşeni</span>` +
+        `<span class="vb-tools"><span class="pill p-${bst}">${LABEL[bst]}</span></span></div>` +
+        `<div class="sys">Sistem</div><div class="pdf">PDF</div></div>${body || '<div class="gx-empty">Farklı alan yok.</div>'}</section>`;
+    }).join("");
+    const vert = root.querySelector(".gx-vert");
+    vert.innerHTML = html || `<div class="gx-empty">Bu filtreye uyan tema yok.</div>`;
+    vert.querySelectorAll("button.vtag[data-id]").forEach((b) => (b.onclick = () => openModal(+b.dataset.id)));
+    renderPager(themes.length, "tema", VPAGE);
+  }
+
   function render(rebuildHead = true) {
+    applyView();
+    if (S.view === "v") { renderVert(visibleRows()); renderFilters(); return; }
     const cols = headers.filter((h) => !S.hidden.has(h));
     const table = root.querySelector(".gx-table");
     // Sol sütunlar: #, ÖÇ, Bileşen, Durum, Tema. Dar ekranda yalnızca ilk üçü sabit kalır.
@@ -285,10 +607,7 @@ export default function (component) {
     }).join("");
     table.querySelector("tbody").innerHTML = body || `<tr><td colspan="${5 + 2 * cols.length}" class="gx-empty">Bu filtreye uyan satır yok.</td></tr>`;
     table.querySelectorAll("tbody tr[data-id]").forEach((tr) => (tr.onclick = () => openModal(+tr.dataset.id)));
-    const pager = root.querySelector(".gx-pager");
-    pager.innerHTML = `<span>${rows.length} satır · sayfa ${S.page + 1}/${pages}</span><button type="button" class="pp" ${S.page === 0 ? "disabled" : ""}>‹ Önceki</button><button type="button" class="pn" ${S.page >= pages - 1 ? "disabled" : ""}>Sonraki ›</button>`;
-    pager.querySelector(".pp").onclick = () => { S.page--; render(false); };
-    pager.querySelector(".pn").onclick = () => { S.page++; render(false); };
+    renderPager(rows.length, "satır", PAGE);
     renderFilters();
     // Uzun alan başlıkları satır kaydırabilir: ikinci başlık satırı, birincinin gerçek yüksekliğinin altına yapışır
     requestAnimationFrame(() => {
@@ -319,7 +638,7 @@ export default function (component) {
       if (S.onlyDiff && !DIFF.has(e)) return "";
       const d = DIFF.has(e) && c.s && c.p ? wordDiff(c.s, c.p) : null;
       const sv = d ? d[0] : esc(c.s), pv = d ? d[1] : esc(c.p);
-      const meta = [c.a ? `Excel ${esc(c.a)}` : "", c.pg && c.pg.length ? `PDF s.${c.pg.join(", ")}` : "", c.src && c.src !== "çıkarım" ? esc(c.src) : ""].filter(Boolean).join(" · ");
+      const meta = cellMeta(c).join(" · ");
       return `<section class="fld st-${e}"><div class="fld-h">${esc(h)} <span class="pill p-${c.st}">${LABEL[c.st]}</span>${badges(c)}<span class="meta">${meta}</span></div>` +
         `<div class="fld-b"><div><span class="lab sys">SİSTEM</span>${sv || '<span class="rep">(boş)</span>'}</div><div><span class="lab pdf">PDF</span>${pv || '<span class="rep">(boş)</span>'}</div></div>` +
         (c.n ? `<div class="fld-n">${esc(c.n)}</div>` : "") +
@@ -342,7 +661,11 @@ export default function (component) {
   if (!root.__gxKeys) {
     root.__gxKeys = true;
     root.ownerDocument.addEventListener("keydown", (e) => {
-      if (modal.hidden) return;
+      if (!pv.hidden) { if (e.key === "Escape") closePv(); return; }
+      if (modal.hidden) {
+        if (e.key === "Escape" && root.classList.contains("is-full") && !realFull()) setFull(false);
+        return;
+      }
       if (e.key === "Escape") closeModal();
       if (e.key === "ArrowLeft") root.querySelector(".gx-prev").click();
       if (e.key === "ArrowRight") root.querySelector(".gx-next").click();
@@ -359,6 +682,25 @@ export default function (component) {
 
 _component = st.components.v2.component("grid_compare_table", html=HTML, css=CSS, js=JS)
 
+# İndirilen HTML: aynı bileşen (HTML/CSS/JS) Streamlit dışında çalışır; Streamlit tema değişkenleri burada verilir.
+_EXPORT_JS = JS.replace("export default function (component)", "function gxMain(component)")
+assert _EXPORT_JS != JS
+_EXPORT_PAGE_CSS = """
+:root { --st-font: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; --st-text-color: #1f2328;
+  --st-primary-color: #ff4b4b; --st-background-color: #fff; --st-secondary-background-color: #f5f6f8;
+  --st-border-color: rgba(128,128,128,.25); }
+body { margin: 0; padding: 16px; background: #fff; color: #1f2328; font-family: var(--st-font); }
+.gx-doc-h { font-size: 1.2rem; margin: 0 0 .25rem; } .gx-doc-s { margin: 0 0 1rem; opacity: .7; font-size: 13px; }
+"""
 
-def grid_table(payload: dict, key: str = "grid_table"):
-    return _component(data=payload, key=key)
+
+def grid_table(payload: dict, key: str = "grid_table", title: str = "", subtitle: str = "", file_name: str = "karsilastirma",
+               pdf_export: dict | None = None):
+    """file_name uzantısız verilir (".html" / "_resimli.html" eklenir). pdf_export yalnızca resimli indirme
+    istendiğinde bir kez verilir: {"token", "pages": {sayfa: jpeg base64}, "locs": {hücre: konum}}."""
+    export = {"css": CSS, "js": _EXPORT_JS, "html": HTML, "page_css": _EXPORT_PAGE_CSS,
+              "title": title, "subtitle": subtitle, "file_name": file_name}
+    data = {**payload, "export": export}
+    if pdf_export:
+        data["pdf_export"] = pdf_export
+    return _component(data=data, key=key, on_open_pdf_change=lambda: None, on_export_images_change=lambda: None)

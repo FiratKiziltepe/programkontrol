@@ -28,6 +28,7 @@ import streamlit as st
 from compare import AYNI, BICIM, KAPSAM_DISI, STATUSES, compare, summary
 from excel_export import (
     RED,
+    _unit_label,
     STATUS_COLORS,
     build_comparison_excel,
     build_pdf_excel,
@@ -38,6 +39,8 @@ from excel_export import (
     units_df,
 )
 import manual_schema
+import pdf_locate
+import pdf_view
 import scope_panel
 from models import SchemaOverrides
 import gemini_verify
@@ -157,6 +160,14 @@ with st.sidebar:
     if st.session_state.get("cmp") is not None:
         st.info(f"Karşılaştırılan Excel: **{st.session_state['xl_name']}**")
 
+def units_table(res, key: str) -> None:
+    """Tema/ünite tablosu; satıra tıklayınca tema başlığı PDF'de gösterilir."""
+    L = pdf_view.locator(res)
+    pdf_view.clickable_dataframe(
+        style_by(units_df(res), "Durum"), key, lambda r, c: L.unit_loc(res.units[r]), res, hide_index=True, width="stretch"
+    )
+
+
 tab_pdf, tab_checks, tab_gemini, tab_cmp, tab_report, tab_grid = st.tabs(
     # "1." Markdown'da numaralı liste sayılmasın diye kaçışlanır
     ["1\\. PDF Analizi", "2\\. PDF Kontrolleri", "3\\. Gemini Doğrulama", "4\\. Excel Karşılaştırma", "5\\. Rapor", "6\\. Tablo Karşılaştırma"]
@@ -217,7 +228,8 @@ with tab_pdf:
                 st.rerun()  # buraya yalnızca başarısız analizde gelinir: elle yapı formu üstte gösterilir
 
         st.subheader("Temalar / üniteler")
-        st.dataframe(style_by(units_df(res), "Durum"), hide_index=True, width="stretch")
+        st.caption(pdf_view.HINT)
+        units_table(res, "loc_units_1")
 
         units = {u.id: f"{u.id} — {(u.context.text + ' | ') if u.context else ''}{u.title.text}".replace("\n", " ") for u in res.units}
         choice = st.selectbox("İçeriğini görmek istediğiniz tema", ["Tümü", *units], format_func=lambda k: units.get(k, "Tüm temalar"))
@@ -226,7 +238,27 @@ with tab_pdf:
         table = los_df(res, uid) if view == "Öğrenme çıktıları" else sections_df(res, uid)
         if uid is not None:
             table = table.drop(columns=["Birim", "Tema"])  # tek tema seçiliyken tekrar eden sütunlar
-        st.dataframe(table, hide_index=True, width="stretch", height=520, column_config=col_config(table))
+        L = pdf_view.locator(res)
+        chosen_units = [u for u in res.units if uid is None or u.id == uid]
+        if view == "Öğrenme çıktıları":
+            refs = [(u, lo, c) for u in chosen_units for lo in u.learning_outcomes for c in (lo.components or [None])]
+
+            def _resolve(r, col):
+                u, lo, comp = refs[r]
+                if col == "Kullanılan kodlar (uygulama)":
+                    spans = L.block_spans(u, lo.code.normalized)
+                    return [(c, L.code_loc(f"{u.id} — {lo.code.raw} uygulamasında {c}", [c], spans)) for c in pdf_locate.split_codes(table.iloc[r][col])] or None
+                return L.lo_loc(u, lo, comp)
+        else:
+            refs = [(u, s) for u in chosen_units for s in u.sections]
+
+            def _resolve(r, col):
+                return L.section_loc(*refs[r])
+
+        st.caption(pdf_view.HINT)
+        pdf_view.clickable_dataframe(
+            table, f"loc_content_{view}_{uid}", _resolve, res, hide_index=True, width="stretch", height=520, column_config=col_config(table)
+        )
 
         st.download_button(
             "PDF'den üretilen Excel'i indir",
@@ -245,7 +277,9 @@ with tab_checks:
     else:
         fdf = findings_df(res)
         st.subheader("Sayı kontrolleri")
-        st.dataframe(style_by(units_df(res), "Durum"), hide_index=True, width="stretch")
+        st.caption(pdf_view.HINT)
+        units_table(res, "loc_units_2")
+        L = pdf_view.locator(res)
 
         st.subheader("Bulgular")
         if fdf.empty:
@@ -263,21 +297,37 @@ with tab_checks:
             if unit_sel:
                 view = view[view["Birim"].isin(unit_sel)]
             st.caption(f"{len(view)} / {len(fdf)} bulgu gösteriliyor")
-            st.dataframe(style_by(view, "Önem"), hide_index=True, width="stretch", height=420)
+            pdf_view.clickable_dataframe(
+                style_by(view, "Önem"), "loc_findings", lambda r, c: L.finding_loc(res.findings[view.index[r]]), res,
+                hide_index=True, width="stretch", height=420,
+            )
 
         st.subheader("Kod kontrolleri (tanımlanan ↔ uygulamalarda kullanılan)")
         st.caption("Alan becerileri kod kontrolü dışındadır.")
-        st.dataframe(code_checks_df(res), hide_index=True, width="stretch", height=360)
+        st.caption("Koda tıklayınca tanımı (Tanımlanan / Tanımlı ama kullanılmamış) ya da uygulamalardaki kullanımları "
+                   "(Kullanılan / Kullanılmış ama tanımlı değil) PDF'de **sarı** işaretli açılır.")
+        ccdf, ccrefs = code_checks_df(res), pdf_locate.code_check_refs(res)
+        pdf_view.clickable_dataframe(
+            ccdf, "loc_codes", lambda r, c: L.code_check_cell(*ccrefs[r], c, str(ccdf.iloc[r][c])), res,
+            hide_index=True, width="stretch", height=360,
+        )
 
         if res.excluded_regions:
             with st.expander("Tema dışı bırakılan bölgeler"):
-                st.dataframe(
+                pdf_view.clickable_dataframe(
                     pd.DataFrame(
                         [
                             {"Başlık": r.heading.text if r.heading else "(başlıksız / sayfa notu)", "Sayfalar": ", ".join(map(str, r.pages)), "Span sayısı": r.span_count}
                             for r in res.excluded_regions
                         ]
                     ),
+                    "loc_excluded",
+                    lambda r, c: L.spans_loc(
+                        f"Tema dışı: {res.excluded_regions[r].heading.text if res.excluded_regions[r].heading else 'başlıksız'}",
+                        res.excluded_regions[r].source_spans,
+                        res.excluded_regions[r].pages,
+                    ),
+                    res,
                     hide_index=True,
                     width="stretch",
                 )
@@ -354,9 +404,19 @@ with tab_gemini:
                 col.metric(GEMINI_STATUS_TR[code], int(counts.get(GEMINI_STATUS_TR[code], 0)))
             only_diff = st.checkbox("Yalnızca uyuşmayanları göster", value=True)
             view = gdf[gdf["Durum"] != GEMINI_STATUS_TR["UYUMLU"]] if only_diff else gdf
-            st.caption(f"Model: {report.model} — {len(report.pages)} sayfa, {len(view)} satır gösteriliyor")
-            st.dataframe(
+            st.caption(f"Model: {report.model} — {len(report.pages)} sayfa, {len(view)} satır gösteriliyor · " + pdf_view.HINT)
+            gL = pdf_view.locator(res)
+            units_by_id = {u.id: u for u in res.units}
+
+            def _gemini_loc(r, col):
+                c = report.checks[view.index[r]]
+                return gL.text_loc(units_by_id.get(c.unit_id or ""), c.extracted or "", [c.page], f"Sayfa {c.page} — {c.extracted or c.gemini or ''}"[:120])
+
+            pdf_view.clickable_dataframe(
                 style_by(view, "_renk"),
+                "loc_gemini",
+                _gemini_loc,
+                res,
                 hide_index=True,
                 width="stretch",
                 height=460,
@@ -415,8 +475,18 @@ with tab_cmp:
             if q:
                 mask = view.apply(lambda r: q.lower() in " ".join(map(str, r.values)).lower(), axis=1)
                 view = view[mask]
-            st.caption(f"{len(view)} / {len(cmp_df)} satır gösteriliyor")
-            st.dataframe(style_by(view, "Durum"), hide_index=True, width="stretch", height=560, column_config=col_config(view))
+            st.caption(f"{len(view)} / {len(cmp_df)} satır gösteriliyor · " + pdf_view.HINT)
+            cL = pdf_view.locator(res)
+            units_by_name = {_unit_label(u): u for u in res.units}
+
+            def _cmp_loc(r, col):
+                row = view.iloc[r]
+                title = " — ".join(x for x in (row["Öğrenme çıktısı"], row["Alan / sütun"], row["Öğe"]) if x)
+                return cL.text_loc(units_by_name.get(row["Tema (PDF)"]), row["PDF değeri"], pdf_locate.page_list(row["PDF sayfa"]), title, row["Öğe"])
+
+            pdf_view.clickable_dataframe(
+                style_by(view, "Durum"), "loc_cmp", _cmp_loc, res, hide_index=True, width="stretch", height=560, column_config=col_config(view)
+            )
 
 # ---------------------------------------------------------------- 5. Rapor
 

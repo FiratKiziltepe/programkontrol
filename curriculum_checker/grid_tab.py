@@ -9,11 +9,13 @@ import streamlit as st
 
 import gemini_verify
 import grid_compare as gc
+import pdf_view
 import review_report as rr
 import scope_panel
 from gemini_tasks_component import gemini_tasks
 from grid_table_component import grid_table
 from pdf_extract import extract_spans
+from pdf_locate import NO_LOCATION, NOT_FOUND, Loc, Locator
 
 K = "gt_"  # oturum anahtarı öneki
 
@@ -27,6 +29,45 @@ def _b64_page(pdf_path: str, page: int) -> str:
     import base64
 
     return base64.b64encode(gemini_verify.render_page(pdf_path, page)).decode("ascii")
+
+
+def cell_loc(L: Locator, grid: gc.Grid, key: str) -> Loc:
+    """Tablo hücresinin PDF'deki yeri (diyalog ve resimli HTML için ortak)."""
+    c = gc.cell_by_key(grid, key)
+    title = gc.cell_title(grid, key)
+    if c is None:
+        return Loc(title, note=NO_LOCATION)
+    if c.pdf_source != gc.SRC_EXTRACTION:  # metin katmanından / Gemini ile tamamlanan: ham metin sayfada aranır
+        return L.raw_text_loc(title, c.pdf, c.pdf_pages or gc._cell_pages(grid, key.partition("|")[0], c))
+    if c.pdf_codes:
+        loc = L.code_loc(title, c.pdf_codes, c.pdf_spans)
+        if loc.found:
+            return loc
+    if c.pdf_spans:
+        return L.spans_loc(title, c.pdf_spans, c.pdf_pages)
+    return Loc(title, list(c.pdf_pages), note=NOT_FOUND if c.pdf_pages else NO_LOCATION)
+
+
+def _pdf_export(res, grid: gc.Grid, L: Locator) -> dict:
+    """Resimli HTML için: hücrelerin PDF sayfaları (bir kez) + her hücrenin sarı kutuları (sayfaya oranla)."""
+    sizes = L.doc.page_sizes
+    locs, pages = {}, set()
+    for scope, c in grid.all_cells():
+        if not (c.pdf or c.pdf_pages):
+            continue
+        key = gc.cell_key(scope, "" if scope[0] == "R" else c.header)
+        loc = cell_loc(L, grid, key)
+        ps = loc.all_pages()
+        if not ps:
+            continue
+        pages |= set(ps)
+        rel = {}
+        for p, rs in loc.rects.items():
+            w, h = sizes[p]
+            rel[str(p)] = [[round((r[0] - 1.5) / w, 5), round((r[1] - 1) / h, 5), round((r[2] + 1.5) / w, 5), round((r[3] + 1) / h, 5)] for r in rs]
+        # uygulamadaki diyalogla aynı: işaretli sayfalar önde
+        locs[key] = {"t": loc.title, "n": loc.note, "pg": [p for p in ps if str(p) in rel] + [p for p in ps if str(p) not in rel], "r": rel}
+    return {"pages": {str(p): pdf_view.page_image_b64(res.source, p) for p in sorted(pages)}, "locs": locs}
 
 
 def _bump():
@@ -86,9 +127,24 @@ def render(res, pdf_name: str, pdf_digest: str) -> None:
     if st.session_state.get(K + "payload_ver") != ver:
         st.session_state[K + "payload"] = gc.grid_payload(grid)
         st.session_state[K + "payload_ver"] = ver
-    grid_table(st.session_state[K + "payload"], key=K + "table")
-
     base = os.path.splitext(pdf_name)[0]
+    xl_label = st.session_state.get(K + "xl_name", "")
+    L = pdf_view.locator(res)
+    ev = grid_table(
+        st.session_state[K + "payload"],
+        key=K + "table",
+        title=f"Tablo karşılaştırma — {pdf_name}",
+        subtitle=f"Sistem Excel'i: {xl_label}" if xl_label else "Sistem Excel'i ↔ PDF",
+        file_name=f"{base}_tablo_karsilastirma",
+        pdf_export=st.session_state.pop(K + "pdf_export", None),  # yalnızca resimli indirmenin istendiği çalıştırmada
+    )
+    if ev is not None and ev.open_pdf:
+        pdf_view.show(res, cell_loc(L, grid, ev.open_pdf.get("k", "")))
+    if ev is not None and ev.export_images:
+        with st.spinner("PDF sayfaları resimli HTML için hazırlanıyor…"):
+            st.session_state[K + "pdf_export"] = {"token": ev.export_images.get("token"), **_pdf_export(res, grid, L)}
+        st.rerun()
+
     st.download_button(
         "Nihai karşılaştırma tablosunu indir (Excel)",
         data=rr.build_grid_xlsx(grid),

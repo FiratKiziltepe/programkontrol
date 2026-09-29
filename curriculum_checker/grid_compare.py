@@ -202,6 +202,8 @@ class GridCell:
     extracted_pdf: str = ""  # tamamlamadan önceki çıkarım değeri
     gemini_unverified: str = ""  # Gemini'nin bildirdiği ama PDF metin katmanında bulunamayan metin
     kind: str = "text"  # "text" | "codes" (kod + ad listesi) | "items" (öğe listesi)
+    pdf_spans: list[str] = field(default_factory=list)  # PDF değerinin kaynak span'leri (PDF'de göster / sarı işaret)
+    pdf_codes: list[str] = field(default_factory=list)  # kod sütunları: span'ler içinde işaretlenecek kod yazımları
 
     def recompute(self) -> None:
         if self.kind == "codes":
@@ -284,6 +286,61 @@ def _pdf_lo_value(u: Unit, lo, header: str) -> tuple[str, list[int]]:
     return "\n\n".join(exact if exact else c.raw for c, exact in entries), pages
 
 
+def _pdf_theme_spans(u: Unit, header: str) -> list[str]:
+    if header == "Tema":
+        return list(u.title.source_spans)
+    sec = section_for_header(u, header)
+    if sec is None:
+        return []
+    f = sec.content or sec.label
+    return list(f.source_spans) if f else []
+
+
+def _pdf_lo_spans(u: Unit, lo, header: str) -> tuple[list[str], list[str]]:
+    """(span'ler, kodlar). Kod sütunlarında uygulama bloğu span'leri + bloktaki kod yazımları."""
+    if header == "Öğrenme Çıktısı":
+        return list((lo.header or lo.title).source_spans), []
+    block = next((b for b in u.applications if b.code is not None and b.code.key == lo.code.key), None)
+    spans = [i for f in ((block.header, block.body) if block else ()) if f is not None for i in f.source_spans]
+    return spans, [c.raw for c, _ in lo_code_column_codes(u, lo.code.key, header)]
+
+
+def cell_key(scope: str, header: str = "") -> str:
+    """Hücre kimliği: "T<tema>|<sütun>", "L<çıktı>|<sütun>" ya da "R<satır>" (süreç bileşeni)."""
+    return f"{scope}|{header}" if header else scope
+
+
+def cell_by_key(grid: "Grid", key: str) -> "GridCell | None":
+    scope, _, header = key.partition("|")
+    try:
+        n = int(scope[1:])
+    except ValueError:
+        return None
+    if scope[0] == "T":
+        return grid.theme_cells.get(n, {}).get(header)
+    if scope[0] == "L":
+        return grid.lo_cells.get(n, {}).get(header)
+    if scope[0] == "R":
+        return grid.comp_cells.get(n)
+    return None
+
+
+def cell_title(grid: "Grid", key: str) -> str:
+    scope, _, header = key.partition("|")
+    kind, n = scope[:1], int(scope[1:]) if scope[1:].isdigit() else -1
+    r = next(
+        (r for r in grid.rows if (kind == "T" and r.theme_id == n) or (kind == "L" and r.lo_id == n) or (kind == "R" and r.id == n)),
+        None,
+    )
+    if r is None:
+        return header or key
+    if kind == "T":
+        return f"{r.theme_label} — {header}"
+    if kind == "L":
+        return f"{r.lo_code} — {header}"
+    return f"{r.lo_code} {r.component} — Süreç Bileşeni".strip()
+
+
 def _sys(cell: Cell | None) -> tuple[str, str]:
     if cell is None:
         return "", ""
@@ -317,7 +374,7 @@ def build_grid(res: ExtractionResult, xl: SystemExcel, scope: set[str] | None = 
             pv, pages, kind = _pdf_theme_value(u, h) if u else ("", [], "text")
             if kind == "text" and _looks_like_items(sv, pv):
                 kind = "items"
-            c = GridCell(h, THEME, sv, pv, pdf_pages=pages, sys_address=addr, extracted_pdf=pv, kind=kind)
+            c = GridCell(h, THEME, sv, pv, pdf_pages=pages, sys_address=addr, extracted_pdf=pv, kind=kind, pdf_spans=_pdf_theme_spans(u, h) if u else [])
             c.recompute()
             tc[h] = c
         grid.theme_cells[tid] = tc
@@ -349,6 +406,8 @@ def build_grid(res: ExtractionResult, xl: SystemExcel, scope: set[str] | None = 
                 sv, addr = _sys(xlo.cell if (xlo and h == "Öğrenme Çıktısı") else (xlo.columns.get(h) if xlo else None))
                 pv, pages = _pdf_lo_value(u, lo, h) if lo is not None else ("", [])
                 c = GridCell(h, LO, sv, pv, pdf_pages=pages, sys_address=addr, extracted_pdf=pv, kind="codes" if h in CODE_COLUMNS else "text")
+                if lo is not None:
+                    c.pdf_spans, c.pdf_codes = _pdf_lo_spans(u, lo, h)
                 c.recompute()
                 lc[h] = c
             grid.lo_cells[lid] = lc
@@ -364,7 +423,8 @@ def build_grid(res: ExtractionResult, xl: SystemExcel, scope: set[str] | None = 
                 sv, addr = _sys(x)
                 marker = (p.marker if p and p.marker else "") or _marker_of(sv) or (f"{i + 1}." if (p or x) else "")
                 rid = len(grid.rows)
-                c = GridCell("Süreç Bileşeni", COMPONENT, sv, pv, pdf_pages=list(p.text.pages) if p else [], sys_address=addr, extracted_pdf=pv)
+                c = GridCell("Süreç Bileşeni", COMPONENT, sv, pv, pdf_pages=list(p.text.pages) if p else [], sys_address=addr, extracted_pdf=pv,
+                             pdf_spans=list((p.full or p.text).source_spans) if p else [])
                 c.recompute()
                 grid.comp_cells[rid] = c
                 grid.rows.append(GridRow(rid, tid, lid, u.id if u else None, label, code, marker, first_theme_row, i == 0))
@@ -632,8 +692,9 @@ def apply_gemini(grid: Grid, doc: PdfDoc, label_colors: Iterable[int], results: 
 
 
 def grid_payload(grid: Grid) -> dict:
-    def cell(c: GridCell) -> dict:
+    def cell(c: GridCell, k: str) -> dict:
         return {
+            "k": k,
             "s": c.sys,
             "p": c.pdf,
             "st": c.status,
@@ -663,9 +724,9 @@ def grid_payload(grid: Grid) -> dict:
             }
             for r in grid.rows
         ],
-        "theme": {str(k): {h: cell(c) for h, c in v.items()} for k, v in grid.theme_cells.items()},
-        "lo": {str(k): {h: cell(c) for h, c in v.items()} for k, v in grid.lo_cells.items()},
-        "comp": {str(k): cell(c) for k, c in grid.comp_cells.items()},
+        "theme": {str(k): {h: cell(c, cell_key(f"T{k}", h)) for h, c in v.items()} for k, v in grid.theme_cells.items()},
+        "lo": {str(k): {h: cell(c, cell_key(f"L{k}", h)) for h, c in v.items()} for k, v in grid.lo_cells.items()},
+        "comp": {str(k): cell(c, cell_key(f"R{k}")) for k, c in grid.comp_cells.items()},
     }
 
 

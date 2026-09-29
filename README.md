@@ -74,7 +74,14 @@ python -m streamlit run curriculum_checker/app.py
 | **3. Gemini Doğrulama** | İsteğe bağlı. Seçilen temaların sayfa görüntüleri **tarayıcıdan** Gemini'ye gider; Gemini'nin gördüğü başlık/kod yerleşimi çıkarımla karşılaştırılır. |
 | **4. Excel Karşılaştırma** | Sistem Excel'i (bir ya da **birden çok** dosya) yüklenir; **karşılaştırma kapsamı** seçilir; öğe bazında iki yönlü karşılaştırma (Aynı, Biçim farkı, PDF'de var/Excel'de yok, …). |
 | **5. Rapor** | Özet ve karşılaştırma raporu (Excel). |
-| **6. Tablo Karşılaştırma** | Sistem Excel'i ↔ PDF Excel'i **hücre hücre yan yana** (renkli farklar, çoklu durum filtresi, satır ayrıntı penceresi). Eksik PDF hücreleri PDF metin katmanından, isteğe bağlı Gemini ile (metin katmanında doğrulanarak) tamamlanır. İnceleme raporu (Word) ve nihai tablo (Excel). |
+| **6. Tablo Karşılaştırma** | Sistem Excel'i ↔ PDF Excel'i **hücre hücre yan yana** (renkli farklar, çoklu durum filtresi, satır ayrıntı penceresi). **Yatay tablo** ya da **dikey** (tema tema) görünüm, tam ekran, **HTML indirme** (resimsiz / resimli). Eksik PDF hücreleri PDF metin katmanından, isteğe bağlı Gemini ile (metin katmanında doğrulanarak) tamamlanır. İnceleme raporu (Word) ve nihai tablo (Excel). |
+
+**PDF'de göster (tüm sekmeler):** Tablolarda bir hücreye (6. sekmede "PDF s.X" bağlantısına) tıklayınca PDF'nin
+ilgili sayfası açılır ve yer **sarı** işaretlenir (önce işaretli bölgenin yakın görünümü, altında sayfanın tamamı).
+Metin hücrelerinde çıkarımın kaynak span'leri; kodlarda PDF metin katmanında kodla **birebir** eşleşen yazımlar
+(D1 ≠ D10 ≠ D1.1) işaretlenir. Kod kontrol tablosunda "Tanımlanan / Tanımlı ama kullanılmamış" tanımı,
+"Kullanılan / Kullanılmış ama tanımlı değil" uygulamalardaki kullanımları gösterir. Bulunamayan yer tahmin
+edilmez: sayfa işaretsiz gösterilir, not düşülür. (`pdf_locate.py`, `pdf_view.py`)
 
 ---
 
@@ -267,6 +274,12 @@ Kod adlarında **yalnızca sondaki "Becerisi" eki** yok sayılır (sistem: "KB2.
 - Tablo: sabit sol sütunlar, yatay kaydırma, renkli farklar, **çoklu seçimli durum filtresi** (sayılı çipler;
   Tamamlananlar / Gemini doğrulanamadı; alan filtresi), arama, sütun gizleme, satıra tıklayınca tüm alanlar ve
   kelime düzeyinde fark vurgusu (←/→ ile gezinme).
+- **Dikey görünüm**: her tema bir blok; tema düzeyindeki alanlar bir kez, öğrenme çıktısı düzeyindeki alanlar
+  (Öğrenme Çıktısı, kod sütunları) ve süreç bileşenleri **tek hücrede**, her çıktı kendi değeri ve durumuyla ayrı
+  parça olarak (birleştirilip yeniden karşılaştırılmaz). Bu görünümde durum sayıları tekil hücre sayısıdır.
+- **Tam ekran** ve **HTML indirme**: dosya çevrimdışı açılır, indirme anındaki görünüm/filtrelerle gelir.
+  *Resimli* seçenekte ilgili PDF sayfaları (bir kez) ve hücrelerin sarı işaret kutuları dosyaya gömülür;
+  dosyada "PDF s.X" bağlantısı sayfayı işaretli açar (dosya büyür).
 - İnceleme raporu (`review_report`): Python ile deterministik Markdown → **Word**; ekte deterministik fark
   tablosu her zaman bulunur. Nihai tablo Excel'i (her alan için Sistem | PDF | Durum).
 
@@ -327,6 +340,8 @@ Gemini'nin yanıtları döner. Varsayılan model `gemini-3.5-flash-lite` (arayü
 | `grid_compare.py` | Hücre bazında yan yana karşılaştırma, metin katmanından ve Gemini ile doğrulanmış tamamlama |
 | `grid_table_component.py` | Yan yana karşılaştırma tablosu (HTML/JS bileşen) |
 | `grid_tab.py` | 6. sekme |
+| `pdf_locate.py` | Hücrenin PDF'deki yeri (sayfa + işaret kutuları), deterministik |
+| `pdf_view.py` | "PDF'de göster" diyaloğu, sarı işaretli sayfa görüntüsü, tıklanabilir tablo yardımcısı |
 | `review_report.py` | İnceleme raporu (Markdown/Word), nihai tablo Excel'i, Gemini rapor istemi |
 | `gemini_verify.py`, `gemini_component.py` | 3. sekme: sayfa görüntüleri, yanıt doğrulama, tarayıcı bileşeni |
 | `gemini_tasks_component.py` | Genel tarayıcı Gemini görev bileşeni (6. sekme) |
