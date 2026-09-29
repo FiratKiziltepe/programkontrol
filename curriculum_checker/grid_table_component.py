@@ -200,28 +200,11 @@ a.pg { color: var(--st-primary-color); text-decoration: underline; cursor: point
 .vr.st-FARKLI > .vf { box-shadow: inset 3px 0 0 #cf222e; } .vr.st-YALNIZCA_SİSTEM > .vf, .vr.st-YALNIZCA_PDF > .vf { box-shadow: inset 3px 0 0 #bf8700; }
 .vr > .vn { grid-column: 1 / -1; border-top: 1px dashed var(--bd); font-size: 12px; opacity: .9; white-space: pre-wrap; }
 .vr > .vn.g { background: rgba(245,166,35,.12); opacity: 1; }
-.vr-c > .vsegs { grid-column: 2 / -1; display: flex; flex-direction: column; min-width: 0; padding: 0; border-left: 1px solid var(--bd); }
-.vsg { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
-.vsg + .vsg { border-top: 1px dashed var(--bd); }
-.vsg > div { padding: .45rem .75rem; min-width: 0; }
-.vsg > .vsg-h { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: .3rem; align-items: center; padding-bottom: 0; font-size: 12px; }
-.vsg-h .meta { opacity: .7; font-size: 11px; }
-.vsg > .vs { white-space: pre-wrap; word-break: break-word; line-height: 1.45; }
-.vsg > .vs + .vs { border-left: 1px solid var(--bd); }
-.vsg.st-FARKLI > .vs { background: var(--diff); } .vsg.st-YALNIZCA_SİSTEM > .vs, .vsg.st-YALNIZCA_PDF > .vs { background: var(--only); }
-.vsg.st-BİÇİM > .vs { background: var(--fmt); }
-.vsg > .vn { grid-column: 1 / -1; border-top: 1px dashed var(--bd); font-size: 12px; white-space: pre-wrap; }
-.vsg > .vn.g { background: rgba(245,166,35,.12); }
-.vtag { border: 1px solid var(--bd); background: var(--bg2); color: inherit; font: inherit; font-weight: 600; border-radius: .35rem; padding: 0 .4rem; cursor: pointer; }
-.vtag:hover { border-color: var(--st-primary-color); }
 @media (max-width: 720px) {
   .gx-vert { --vcols: 1fr; padding: .4rem; }
   .vb-h > div.sys, .vb-h > div.pdf { display: none; }
   .vr > .vs { border-left: 0; border-top: 1px solid var(--bd); }
   .vr .vs .lab { display: block; }
-  .vr-c > .vsegs { grid-column: 1 / -1; border-left: 0; border-top: 1px solid var(--bd); }
-  .vsg { grid-template-columns: 1fr; }
-  .vsg > .vs + .vs { border-left: 0; border-top: 1px solid var(--bd); }
 }
 @media (max-width: 720px) {
   .gx-hint { display: none; }
@@ -243,7 +226,7 @@ function wordDiff(a, b) {
   // Kelime + ardından gelen boşluk bir birimdir; karşılaştırma yalnızca kelimelerle yapılır (boşluk miktarı fark sayılmaz)
   const tok = (t) => ((t || "").match(/\S+\s*/g) || []);
   const A = tok(a), B = tok(b);
-  if (A.length * B.length > 250000) return null;  // çok uzun metinde vurgulama yapılmaz
+  if (A.length * B.length > 1500000) return null;  // çok uzun metinde vurgulama yapılmaz
   const W = (x) => x.trim();
   const n = A.length, m = B.length, L = Array.from({ length: n + 1 }, () => new Uint32Array(m + 1));
   for (let i = n - 1; i >= 0; i--) for (let j = m - 1; j >= 0; j--) L[i][j] = W(A[i]) === W(B[j]) ? L[i + 1][j + 1] + 1 : Math.max(L[i + 1][j], L[i][j + 1]);
@@ -308,16 +291,17 @@ export default function (component) {
 
   // araç çubuğu: filtre çipleri
   const seg = root.querySelector(".gx-seg");
-  // Dikey görünümde sayılar satır değil tekil hücredir: tema düzeyindeki bir fark her öğrenme çıktısında tekrar sayılmaz.
-  const ALL_CELLS = [
-    ...Object.values(D.theme || {}).flatMap((cs) => Object.entries(cs)),
-    ...Object.values(D.lo || {}).flatMap((cs) => Object.entries(cs)),
-    ...Object.values(D.comp || {}).map((c) => ["Süreç Bileşeni", c]),
-  ];
+  // Dikey görünüm hücreleri: tema başına tema düzeyindeki alanlar + birleştirilmiş alanlar (D.tm), her biri bir kez.
+  // Bu görünümde sayılar tekil hücredir: temadaki bir hata her öğrenme çıktısında tekrar sayılmaz.
+  const MERGED_LO = D.merged_lo || "Öğrenme Çıktısı ve Süreç Bileşenleri";
+  const vHeadersOf = (h) => (h === MERGED_LO ? ["Öğrenme Çıktısı", "Süreç Bileşeni"] : [h]);  // alan filtresi / sütun gizleme
+  const vFieldOk = (h) => !S.fields.size || vHeadersOf(h).some((x) => S.fields.has(x));
+  const vCells = (t) => [...Object.entries((D.theme || {})[t] || {}), ...Object.entries((D.tm || {})[t] || {})];
+  const THEMES = [...new Set((D.rows || []).map((r) => r.t))];
   function renderFilters() {
     const rows = D.rows || [];
     const statuses = STATUS_ORDER.filter((s) => !(S.fmt && s === "BİÇİM"));
-    const vcells = ALL_CELLS.filter(([h]) => !S.fields.size || S.fields.has(h)).map(([, c]) => c);
+    const vcells = S.view === "v" ? THEMES.flatMap((t) => vCells(t)).filter(([h]) => vFieldOk(h)).map(([, c]) => c) : [];
     const nStatus = (s) => (S.view === "v" ? vcells.filter((c) => eff(c.st) === s).length : rows.filter((r) => rowHas(r, s)).length);
     const nFlag = (f) => (S.view === "v" ? vcells.filter(f).length : rows.filter((r) => fieldCells(r).some(f)).length);
     const chip = (kind, key, label, n, extra = "") =>
@@ -360,7 +344,7 @@ export default function (component) {
     root.querySelector(".gx-scroll").classList.toggle("v", S.view === "v");
     vonly.hidden = S.view !== "v";
     root.querySelector(".gx-hint").textContent = S.view === "v"
-      ? "Her tema bir blok · sayılar tekil alan (hücre) sayısıdır · öğe etiketine tıklayınca o satır açılır"
+      ? "Her tema bir blok · öğrenme çıktıları ve kodlar temada tek hücrede · sayılar tekil hücre sayısıdır"
       : "Satıra tıklayınca tüm alanlar açılır · tabloyu yatay kaydırın";
   }
 
@@ -492,86 +476,61 @@ export default function (component) {
     pager.querySelector(".pn").onclick = () => { S.page++; render(false); };
   }
 
-  // Dikey görünüm: her TEMA bir blok. Alanlar sistem Excel'i sütun sırasıyla alt alta, Sistem | PDF yan yana.
-  // Tema düzeyindeki alanlar blokta bir kez; öğrenme çıktısı düzeyindeki alanlar (Öğrenme Çıktısı, kod sütunları) ve
-  // süreç bileşenleri tek hücrede toplanır. Toplanan hücrede her öğe kendi değeri ve durumuyla ayrı parça olarak durur
-  // (öğeler birleştirilip yeniden karşılaştırılmaz; fark hangi çıktıda ise orada görünür).
-  const themeRows = new Map();
-  for (const r of D.rows || []) (themeRows.get(r.t) || themeRows.set(r.t, []).get(r.t)).push(r);
-  const hasLo = (r) => r.l !== null && r.l !== undefined;
+  // Dikey görünüm: her TEMA bir blok; alanlar sistem Excel'i sütun sırasıyla alt alta, Sistem | PDF yan yana.
+  // Tema düzeyindeki alanlar ve temanın birleştirilmiş alanları (öğrenme çıktıları + süreç bileşenleri tek hücrede,
+  // ÖÇ düzeyindeki kod sütunları temada tek listede; Python: grid_compare.merged_theme_cells) birer kez gösterilir.
   const VPAGE = 10;
-  function vField(label, e, st, head, sv, pv, c, meta) {
-    return `<div class="vr st-${e}"><div class="vf">${esc(label)}<div class="vfm"><span class="pill p-${st}">${LABEL[st]}</span>${head}</div>` +
+  const notes = (c) => (c.n ? `<div class="vn">${esc(c.n)}</div>` : "") +
+    (c.x ? `<div class="vn">Tamamlamadan önceki çıkarım: ${esc(c.x) || "(boş)"}</div>` : "") +
+    (c.g ? `<div class="vn g"><b>Gemini önerisi — PDF metin katmanında doğrulanamadı, tabloya alınmadı:</b>\n${esc(c.g)}</div>` : "");
+  function vField(label, c) {
+    const e = eff(c.st);
+    const [sv, pv] = diffPair(c, e);
+    const meta = cellMeta(c).join(" · ");
+    return `<div class="vr st-${e}"><div class="vf">${esc(label)}<div class="vfm"><span class="pill p-${c.st}">${LABEL[c.st]}</span>${badges(c)}</div>` +
       (meta ? `<div class="meta">${meta}</div>` : "") + `</div>` +
       `<div class="vs"><span class="lab sys">SİSTEM</span>${sv || '<span class="rep">(boş)</span>'}</div>` +
       `<div class="vs"><span class="lab pdf">PDF</span>${pv || '<span class="rep">(boş)</span>'}</div>` + notes(c) + `</div>`;
   }
-  const notes = (c) => (c.n ? `<div class="vn">${esc(c.n)}</div>` : "") +
-    (c.x ? `<div class="vn">Tamamlamadan önceki çıkarım: ${esc(c.x) || "(boş)"}</div>` : "") +
-    (c.g ? `<div class="vn g"><b>Gemini önerisi — PDF metin katmanında doğrulanamadı, tabloya alınmadı:</b>\n${esc(c.g)}</div>` : "");
-  function vCombined(label, segs) {
-    const e = worst(new Set(segs.map((x) => eff(x.c.st))));
-    if (S.vOnly && !DIFF.has(e)) return "";
-    const shown = S.vOnly ? segs.filter((x) => DIFF.has(eff(x.c.st))) : segs;
-    const nDiff = segs.filter((x) => DIFF.has(eff(x.c.st))).length;
-    const parts = shown.map((x) => {
-      const se = eff(x.c.st);
-      const [sv, pv] = diffPair(x.c, se);
-      const meta = cellMeta(x.c).join(" · ");
-      return `<div class="vsg st-${se}"><div class="vsg-h"><button type="button" class="vtag" data-id="${x.id}" title="Bu satırın tüm alanlarını aç">${esc(x.tag)}</button>` +
-        `<span class="pill p-${x.c.st}">${LABEL[x.c.st]}</span>${badges(x.c)}${meta ? `<span class="meta">${meta}</span>` : ""}</div>` +
-        `<div class="vs"><span class="lab sys">SİSTEM</span>${sv || '<span class="rep">(boş)</span>'}</div>` +
-        `<div class="vs"><span class="lab pdf">PDF</span>${pv || '<span class="rep">(boş)</span>'}</div>` + notes(x.c) + `</div>`;
-    }).join("");
-    const hidden = segs.length - shown.length;
-    return `<div class="vr vr-c st-${e}"><div class="vf">${esc(label)}<div class="vfm"><span class="pill p-${e}">${LABEL[e]}</span></div>` +
-      `<div class="meta">${segs.length} öğe${nDiff ? ` · ${nDiff} farklı` : ""}${hidden ? ` · ${hidden} farksız öğe gizli` : ""}</div></div>` +
-      `<div class="vsegs">${parts}</div></div>`;
+  function themeVisible(t) {
+    const cs = vCells(t).filter(([h]) => vFieldOk(h)).map(([, c]) => c);
+    if (S.sel.size && !cs.some((c) => S.sel.has(eff(c.st)))) return false;
+    if (![...S.flags].every((k) => cs.some(FLAGS.find((f) => f[0] === k)[2]))) return false;
+    if (!S.q) return true;
+    const q = S.q.toLocaleLowerCase("tr");
+    return (D.rows || []).some((r) => r.t === t && (r.lo + " " + r.tl + " " + r.c).toLocaleLowerCase("tr").includes(q)) ||
+      vCells(t).some(([, c]) => (c.s + " " + c.p).toLocaleLowerCase("tr").includes(q));
   }
-  function renderVert(rows) {
-    const cols = headers.filter((h) => !S.hidden.has(h));
-    const themes = [...new Set(rows.map((r) => r.t))];
+  function renderVert() {
+    const themes = THEMES.filter(themeVisible);
     const pages = Math.max(1, Math.ceil(themes.length / VPAGE));
     S.page = Math.min(S.page, pages - 1);
     const html = themes.slice(S.page * VPAGE, (S.page + 1) * VPAGE).map((t) => {
-      const trs = themeRows.get(t) || [];
-      const r0 = trs[0];
-      const los = trs.filter((r) => r.fl && hasLo(r));  // her öğrenme çıktısının ilk satırı
-      const tcells = (D.theme || {})[t] || {};
-      const sts = new Set();
-      const body = cols.map((h) => {
-        const lvl = levels[h];
-        if (lvl === "theme") {
-          const c = tcells[h];
-          if (!c) return "";
-          const e = eff(c.st);
-          sts.add(e);
-          if (S.vOnly && !DIFF.has(e)) return "";
-          const [sv, pv] = diffPair(c, e);
-          return vField(h, e, c.st, badges(c), sv, pv, c, cellMeta(c).join(" · "));
-        }
-        const segs = lvl === "component"
-          ? trs.filter((r) => (D.comp || {})[r.id]).map((r) => ({ tag: [r.lo, r.c].filter(Boolean).join(" · ") || `#${r.id + 1}`, id: r.id, c: D.comp[r.id] }))
-          : los.filter((r) => ((D.lo || {})[r.l] || {})[h]).map((r) => ({ tag: r.lo || `#${r.id + 1}`, id: r.id, c: D.lo[r.l][h] }));
-        if (!segs.length) return "";
-        segs.forEach((x) => sts.add(eff(x.c.st)));
-        return vCombined(h, segs);
-      }).join("");
-      const bst = worst(sts);
-      return `<section class="vb"><div class="vb-h"><div class="vb-id"><span>${esc(r0.tl || "(tema yok)")}</span>` +
-        `<span class="vb-t">${los.length} öğrenme çıktısı · ${trs.filter((r) => (D.comp || {})[r.id]).length} süreç bileşeni</span>` +
+      const trs = (D.rows || []).filter((r) => r.t === t);
+      const tc = (D.theme || {})[t] || {}, mc = (D.tm || {})[t] || {};
+      const items = [];
+      for (const h of headers) {
+        if (h === "Süreç Bileşeni") continue;  // öğrenme çıktılarıyla birlikte tek hücrede
+        const key = h === "Öğrenme Çıktısı" ? MERGED_LO : h;
+        if (vHeadersOf(key).every((x) => S.hidden.has(x))) continue;
+        const c = tc[key] || mc[key];
+        if (c) items.push([key, c]);
+      }
+      const bst = worst(new Set(items.map(([, c]) => eff(c.st))));
+      const body = items.map(([h, c]) => (S.vOnly && !DIFF.has(eff(c.st)) ? "" : vField(h, c))).join("");
+      const nLo = new Set(trs.filter((r) => r.l !== null && r.l !== undefined).map((r) => r.l)).size;
+      return `<section class="vb"><div class="vb-h"><div class="vb-id"><span>${esc(trs[0] ? trs[0].tl : "") || "(tema yok)"}</span>` +
+        `<span class="vb-t">${nLo} öğrenme çıktısı · ${trs.filter((r) => (D.comp || {})[r.id]).length} süreç bileşeni</span>` +
         `<span class="vb-tools"><span class="pill p-${bst}">${LABEL[bst]}</span></span></div>` +
         `<div class="sys">Sistem</div><div class="pdf">PDF</div></div>${body || '<div class="gx-empty">Farklı alan yok.</div>'}</section>`;
     }).join("");
-    const vert = root.querySelector(".gx-vert");
-    vert.innerHTML = html || `<div class="gx-empty">Bu filtreye uyan tema yok.</div>`;
-    vert.querySelectorAll("button.vtag[data-id]").forEach((b) => (b.onclick = () => openModal(+b.dataset.id)));
+    root.querySelector(".gx-vert").innerHTML = html || `<div class="gx-empty">Bu filtreye uyan tema yok.</div>`;
     renderPager(themes.length, "tema", VPAGE);
   }
 
   function render(rebuildHead = true) {
     applyView();
-    if (S.view === "v") { renderVert(visibleRows()); renderFilters(); return; }
+    if (S.view === "v") { renderVert(); renderFilters(); return; }
     const cols = headers.filter((h) => !S.hidden.has(h));
     const table = root.querySelector(".gx-table");
     // Sol sütunlar: #, ÖÇ, Bileşen, Durum, Tema. Dar ekranda yalnızca ilk üçü sabit kalır.

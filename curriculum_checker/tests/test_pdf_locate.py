@@ -58,6 +58,24 @@ def test_code_check_rows_and_findings_have_locations(loc):
     assert all(L.finding_loc(f).found for f in res.findings if f.details.get("spans") or f.details.get("label_spans"))
 
 
+def test_merged_theme_cells_show_each_error_once(loc):
+    """Dikey görünüm: çıktılar + bileşenler tek hücrede, kod sütunu temada tek liste; OB5 ad farkı bir kez."""
+    res, L, xl = loc
+    import grid_tab
+
+    grid = gc.build_grid(res, xl)
+    m = gc.merged_theme_cells(grid)[0]
+    lo = m[gc.MERGED_LO_HEADER]
+    lids = {r.lo_id for r in grid.rows if r.theme_id == 0 and r.lo_id is not None}
+    assert all(grid.lo_cells[l]["Öğrenme Çıktısı"].pdf.strip() in lo.pdf for l in lids)
+    ob = m["Okuryazarlık Becerileri"]
+    assert ob.status == gc.FARKLI and ob.sys.count("OB5") == 1 and ob.note.count("OB5") == 1
+    per_lo = [grid.lo_cells[l]["Okuryazarlık Becerileri"] for l in lids]
+    assert sum(c.status == gc.FARKLI for c in per_lo) > 1  # yan yana satırlarda tekrar ediyordu
+    # kaynak hücreler değişmez; birleşik hücrenin PDF konumu parçalarından
+    assert grid_tab.cell_loc(L, grid, gc.cell_key("M0", "Okuryazarlık Becerileri")).found
+
+
 def test_grid_code_column_marks_only_block_codes(loc):
     res, L, xl = loc
     import grid_tab

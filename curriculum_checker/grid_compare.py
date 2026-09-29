@@ -204,6 +204,7 @@ class GridCell:
     kind: str = "text"  # "text" | "codes" (kod + ad listesi) | "items" (öğe listesi)
     pdf_spans: list[str] = field(default_factory=list)  # PDF değerinin kaynak span'leri (PDF'de göster / sarı işaret)
     pdf_codes: list[str] = field(default_factory=list)  # kod sütunları: span'ler içinde işaretlenecek kod yazımları
+    members: list[str] = field(default_factory=list)  # tema düzeyinde birleştirilmiş hücrede: kaynak hücre anahtarları
 
     def recompute(self) -> None:
         if self.kind == "codes":
@@ -316,6 +317,8 @@ def cell_by_key(grid: "Grid", key: str) -> "GridCell | None":
         n = int(scope[1:])
     except ValueError:
         return None
+    if scope[0] == "M":
+        return merged_theme_cells(grid).get(n, {}).get(header)
     if scope[0] == "T":
         return grid.theme_cells.get(n, {}).get(header)
     if scope[0] == "L":
@@ -329,12 +332,12 @@ def cell_title(grid: "Grid", key: str) -> str:
     scope, _, header = key.partition("|")
     kind, n = scope[:1], int(scope[1:]) if scope[1:].isdigit() else -1
     r = next(
-        (r for r in grid.rows if (kind == "T" and r.theme_id == n) or (kind == "L" and r.lo_id == n) or (kind == "R" and r.id == n)),
+        (r for r in grid.rows if (kind in ("T", "M") and r.theme_id == n) or (kind == "L" and r.lo_id == n) or (kind == "R" and r.id == n)),
         None,
     )
     if r is None:
         return header or key
-    if kind == "T":
+    if kind in ("T", "M"):
         return f"{r.theme_label} — {header}"
     if kind == "L":
         return f"{r.lo_code} — {header}"
@@ -481,6 +484,123 @@ def row_status(grid: Grid, r: GridRow) -> str:
         if s in sts:
             return s
     return BOS
+
+
+# ---------------------------------------------------------------- tema düzeyinde birleştirilmiş hücreler (dikey görünüm)
+
+MERGED_LO_HEADER = "Öğrenme Çıktısı ve Süreç Bileşenleri"
+
+
+def _merge_status(sts: Iterable[str]) -> str:
+    """Parçaların durumlarından birleşik durum: hepsi aynıysa o; herhangi bir fark varsa FARKLI."""
+    sts = [s for s in sts if s != BOS]
+    if not sts:
+        return BOS
+    if len(set(sts)) == 1:
+        return sts[0]
+    if any(s in DIFF_STATUSES for s in sts):
+        return FARKLI
+    return BICIM if BICIM in sts else AYNI
+
+
+def _entry_sort(e: str):
+    m = _CODE_LINE_RE.match(e.strip())
+    if not m:
+        return ("~", [], e)
+    code = m.group(1)
+    return (re.match(r"\D*", code).group(0), [int(x) for x in re.findall(r"\d+", code)], e)
+
+
+def _union_entries(texts: list[str], split) -> list[str]:
+    seen, out = set(), []
+    for t in texts:
+        for e in split(t):
+            if _ws(e) not in seen:
+                seen.add(_ws(e))
+                out.append(e.strip())
+    return sorted(out, key=_entry_sort)
+
+
+def _sys_code_entries(t: str) -> list[str]:
+    return [ln for ln, _, _ in code_items(Cell("", "", t or "", 0, 0)) if norm_label(ln) not in {"yok", ""}]
+
+
+def _pdf_code_entries(t: str) -> list[str]:
+    return [e for e in re.split(r"\n\s*\n", t or "") if e.strip()]
+
+
+def _merged_meta(parts: list[tuple[str, GridCell]]) -> dict:
+    srcs = {c.pdf_source for _, c in parts if c.pdf_source != SRC_EXTRACTION}
+    return {
+        "pdf_source": SRC_EXTRACTION if not srcs else (srcs.pop() if len(srcs) == 1 else "karışık"),
+        "pdf_pages": sorted({p for _, c in parts for p in c.pdf_pages}),
+        "gemini_unverified": "\n".join(f"{lbl}: {c.gemini_unverified}" for lbl, c in parts if c.gemini_unverified),
+        "members": [k for k, _ in parts],
+    }
+
+
+def _part_label(grid: "Grid", key: str) -> str:
+    return cell_title(grid, key).split(" — ")[0]
+
+
+def merged_theme_cells(grid: Grid) -> dict[int, dict[str, GridCell]]:
+    """Dikey görünüm için tema başına tek hücreler (yalnızca GÖRÜNTÜLEME; kaynak hücrelerin durumları değişmez):
+    - "Öğrenme Çıktısı ve Süreç Bileşenleri": temanın bütün çıktıları, altlarında bileşenleriyle tek metin.
+    - ÖÇ düzeyindeki kod sütunları: temadaki bütün çıktıların girdileri tek listede (aynı girdi bir kez), kod sırasıyla.
+      Bir kodun yalnızca bazı çıktılarda eksik/fazla olması gizlenmez: çıktı koduyla not düşülür.
+    Durum kaynak hücrelerin durumlarından birleştirilir (herhangi bir fark → FARKLI)."""
+    by_theme: dict[int, list[GridRow]] = {}
+    for r in grid.rows:
+        by_theme.setdefault(r.theme_id, []).append(r)
+    lo_headers = [h for h in grid.headers if column_level(h) == LO and h != "Öğrenme Çıktısı"]
+    out: dict[int, dict[str, GridCell]] = {}
+    for tid, rows in by_theme.items():
+        lids = list(dict.fromkeys(r.lo_id for r in rows if r.lo_id is not None))
+        lo_code = {lid: next(r.lo_code for r in rows if r.lo_id == lid) for lid in lids}
+        cells: dict[str, GridCell] = {}
+        # öğrenme çıktısı + süreç bileşenleri: çıktı çıktı, bileşenler altında
+        parts: list[tuple[str, GridCell]] = []
+        sys_blocks, pdf_blocks = [], []
+        for lid in lids:
+            block = []
+            lo_cell = grid.lo_cells.get(lid, {}).get("Öğrenme Çıktısı")
+            if lo_cell is not None:
+                block.append((cell_key(f"L{lid}", "Öğrenme Çıktısı"), lo_cell))
+            block += [(cell_key(f"R{r.id}"), grid.comp_cells[r.id]) for r in rows if r.lo_id == lid and r.id in grid.comp_cells]
+            parts += block
+            sys_blocks.append("\n".join(c.sys.strip() for _, c in block if c.sys.strip()))
+            pdf_blocks.append("\n".join(c.pdf.strip() for _, c in block if c.pdf.strip()))
+        if parts:
+            notes = list(dict.fromkeys(f"{_part_label(grid, k)}: {c.note}" for k, c in parts if c.note))
+            cells[MERGED_LO_HEADER] = GridCell(
+                MERGED_LO_HEADER, "merged", "\n\n".join(b for b in sys_blocks if b), "\n\n".join(b for b in pdf_blocks if b),
+                status=_merge_status(c.status for _, c in parts), note=" | ".join(notes), **_merged_meta(parts),
+            )
+        # ÖÇ düzeyindeki kod sütunları: temanın bütün çıktılarındaki girdiler bir kez
+        for h in lo_headers:
+            parts = [(cell_key(f"L{lid}", h), grid.lo_cells[lid][h]) for lid in lids if h in grid.lo_cells.get(lid, {})]
+            if not parts:
+                continue
+            sys_u = _union_entries([c.sys for _, c in parts], _sys_code_entries)
+            pdf_u = _union_entries([c.pdf for _, c in parts], _pdf_code_entries)
+            sv, pv = "\n".join(sys_u), "\n\n".join(pdf_u)
+            if h in CODE_COLUMNS:
+                _, union_note = code_cell_status(sv, pv)
+                notes = [x for x in union_note.split(" | ") if x and not x.startswith("Yalnızca")]
+                for k, c in parts:  # yalnızca bazı çıktılarda eksik/fazla olan kodlar
+                    lid = int(k.split("|")[0][1:])
+                    notes += [f"{lo_code[lid]} — {x}" for x in c.note.split(" | ") if x.startswith("Yalnızca")]
+                for side, entries in (("Sistemde", sys_u), ("PDF'de", pdf_u)):
+                    keys = [k for e in entries for k in _code_map([e])]
+                    dup = sorted({_code_str(k) for k in keys if k[0] != "?" and keys.count(k) > 1})
+                    if dup:
+                        notes.append(f"{side} aynı kod farklı yazılmış: " + ", ".join(dup))
+            else:
+                notes = list(dict.fromkeys(f"{_part_label(grid, k)}: {c.note}" for k, c in parts if c.note))
+            cells[h] = GridCell(h, "merged", sv, pv, status=_merge_status(c.status for _, c in parts), note=" | ".join(notes),
+                                kind="codes" if h in CODE_COLUMNS else "text", **_merged_meta(parts))
+        out[tid] = cells
+    return out
 
 
 # ---------------------------------------------------------------- PDF metin katmanında arama
@@ -727,6 +847,9 @@ def grid_payload(grid: Grid) -> dict:
         "theme": {str(k): {h: cell(c, cell_key(f"T{k}", h)) for h, c in v.items()} for k, v in grid.theme_cells.items()},
         "lo": {str(k): {h: cell(c, cell_key(f"L{k}", h)) for h, c in v.items()} for k, v in grid.lo_cells.items()},
         "comp": {str(k): cell(c, cell_key(f"R{k}")) for k, c in grid.comp_cells.items()},
+        # dikey görünüm: tema başına birleştirilmiş hücreler
+        "tm": {str(t): {h: cell(c, cell_key(f"M{t}", h)) for h, c in v.items()} for t, v in merged_theme_cells(grid).items()},
+        "merged_lo": MERGED_LO_HEADER,
     }
 
 

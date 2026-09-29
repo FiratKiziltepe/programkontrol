@@ -37,6 +37,19 @@ def cell_loc(L: Locator, grid: gc.Grid, key: str) -> Loc:
     title = gc.cell_title(grid, key)
     if c is None:
         return Loc(title, note=NO_LOCATION)
+    if c.members:  # tema düzeyinde birleştirilmiş hücre (dikey görünüm): parçaların yerleri birlikte
+        parts = [cell_loc(L, grid, k) for k in c.members]
+        rects: dict[int, list] = {}
+        for p in parts:
+            for pg, rs in p.rects.items():
+                rects.setdefault(pg, []).extend(rs)
+        loc = Loc(title, sorted({pg for p in parts for pg in p.all_pages()}), rects)
+        missing = sum(1 for p in parts if not p.found and p.pages)
+        if not loc.found:
+            loc.note = NOT_FOUND if loc.pages else NO_LOCATION
+        elif missing:
+            loc.note = f"{missing} parçanın yeri PDF'de birebir bulunamadı; yalnızca bulunanlar işaretlendi (inceleme gerekli)."
+        return loc
     if c.pdf_source != gc.SRC_EXTRACTION:  # metin katmanından / Gemini ile tamamlanan: ham metin sayfada aranır
         return L.raw_text_loc(title, c.pdf, c.pdf_pages or gc._cell_pages(grid, key.partition("|")[0], c))
     if c.pdf_codes:
@@ -52,10 +65,11 @@ def _pdf_export(res, grid: gc.Grid, L: Locator) -> dict:
     """Resimli HTML için: hücrelerin PDF sayfaları (bir kez) + her hücrenin sarı kutuları (sayfaya oranla)."""
     sizes = L.doc.page_sizes
     locs, pages = {}, set()
-    for scope, c in grid.all_cells():
+    cells = [(gc.cell_key(scope, "" if scope[0] == "R" else c.header), c) for scope, c in grid.all_cells()]
+    cells += [(gc.cell_key(f"M{t}", h), c) for t, cs in gc.merged_theme_cells(grid).items() for h, c in cs.items()]
+    for key, c in cells:
         if not (c.pdf or c.pdf_pages):
             continue
-        key = gc.cell_key(scope, "" if scope[0] == "R" else c.header)
         loc = cell_loc(L, grid, key)
         ps = loc.all_pages()
         if not ps:

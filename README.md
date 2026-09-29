@@ -274,9 +274,11 @@ Kod adlarında **yalnızca sondaki "Becerisi" eki** yok sayılır (sistem: "KB2.
 - Tablo: sabit sol sütunlar, yatay kaydırma, renkli farklar, **çoklu seçimli durum filtresi** (sayılı çipler;
   Tamamlananlar / Gemini doğrulanamadı; alan filtresi), arama, sütun gizleme, satıra tıklayınca tüm alanlar ve
   kelime düzeyinde fark vurgusu (←/→ ile gezinme).
-- **Dikey görünüm**: her tema bir blok; tema düzeyindeki alanlar bir kez, öğrenme çıktısı düzeyindeki alanlar
-  (Öğrenme Çıktısı, kod sütunları) ve süreç bileşenleri **tek hücrede**, her çıktı kendi değeri ve durumuyla ayrı
-  parça olarak (birleştirilip yeniden karşılaştırılmaz). Bu görünümde durum sayıları tekil hücre sayısıdır.
+- **Dikey görünüm**: her tema bir blok; her alan temada **bir kez** (`grid_compare.merged_theme_cells`, yalnızca
+  görüntüleme). "Öğrenme Çıktısı ve Süreç Bileşenleri" tek hücre: bütün çıktılar, altlarında bileşenleri. ÖÇ
+  düzeyindeki kod sütunları temada tek liste (aynı girdi bir kez) — böylece ör. bir kod adındaki yazım hatası her
+  çıktıda tekrar görünmez; bir kodun yalnızca bazı çıktılarda eksik/fazla olması çıktı koduyla not düşülür. Durum
+  kaynak hücrelerden birleştirilir (herhangi bir fark → Farklı). Bu görünümde durum sayıları tekil hücre sayısıdır.
 - **Tam ekran** ve **HTML indirme**: dosya çevrimdışı açılır, indirme anındaki görünüm/filtrelerle gelir.
   *Resimli* seçenekte ilgili PDF sayfaları (bir kez) ve hücrelerin sarı işaret kutuları dosyaya gömülür;
   dosyada "PDF s.X" bağlantısı sayfayı işaretli açar (dosya büyür).
