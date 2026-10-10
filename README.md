@@ -65,6 +65,18 @@ python -m streamlit run curriculum_checker/app.py
 
 ---
 
+### Toplu çalıştırma (çok sayıda PDF, Streamlit'siz) — `batch.py`
+
+```
+python curriculum_checker/batch.py "C:\Users\...\programlar"
+```
+Klasördeki (alt klasörler dahil) her PDF için `_cikti\<ad>\` altına PDF Excel'i ve işaretli PDF (Hata + İnceleme
+gerekli) yazılır. `_cikti\ozet.xlsx` her PDF'i bir satırda gösterir; **otomatik tanıma sorunlarını** (yapı sayfası yok,
+süre tablosu eşleşmedi, ÖÇ bölümü bulunamadı …) gruplar ve bulgu türlerini listeler. İçerik hataları (ör. tanımlanmamış
+kod) tanıma sorunu sayılmaz. Tanınamayan PDF'ler için `<klasör>\elle_yapi.xlsx` doldurulur (arayüzdeki elle yapı
+formuyla aynı alanlar). PDF, elle yapı satırı ve kod değişmediyse PDF yeniden işlenmez; `--yeniden` hepsini baştan
+işler, `--saat-yoksay` ders saati uyuşmazlığını göz ardı eder. PDF'ler paralel işlenir.
+
 ## 3. Arayüz: sekmeler ve iş akışı
 
 | Sekme | Ne yapar |
@@ -359,6 +371,7 @@ Gemini'nin yanıtları döner. Varsayılan model `gemini-3.5-flash-lite` (arayü
 | `grid_tab.py` | 6. sekme |
 | `pdf_locate.py` | Hücrenin PDF'deki yeri (sayfa + işaret kutuları), deterministik |
 | `pdf_view.py` | "PDF'de göster" diyaloğu, sarı işaretli sayfa görüntüsü, tıklanabilir tablo yardımcısı |
+| `batch.py` | Toplu çalıştırma: klasördeki PDF'ler → Excel + işaretli PDF + `ozet.xlsx`; `elle_yapi.xlsx` |
 | `labels_tr.py` | Gösterim adları: kontrol kodları, önem/durum, karşılaştırma durumları, birim adı (U01 → "6. SINIF · 1. TEMA"). İç kodlar değişmez |
 | `pdf_annotate.py` | İşaretli PDF: vurgular, sağ şeritte açıklama kutuları, tanımsız kod için tanım bölümü kanıtı, yer imleri |
 | `review_report.py` | İnceleme raporu (Markdown/Word), nihai tablo Excel'i, Gemini rapor istemi |
