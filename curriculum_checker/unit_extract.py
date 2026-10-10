@@ -125,6 +125,13 @@ def merge_labels(label_spans: list[Span], schema: ProgramSchema) -> list[_Label]
                     any(v.startswith(merged_norm) for v in vocab)
                     or label_prefix_variant(merged_norm, vocab)
                     or compound_subset_of(merged_text, schema.labels, partial=True, allow_unknown=True)
+                    # Bağlaçla biten (ya da bağlaçla başlayan sonraki) başlık satırı tamamlanmamıştır (özel eğitim s.14 "ÖĞRENME ÇIKTILARI VE" +
+                    # "SÜREÇ BİLEŞENLERİ"): sıkı layout ve aynı yazı kalınlığıyla alttaki satırla birleşir
+                    or (
+                        leading <= 0.6 * prev.size
+                        and font_rank(first.font) == font_rank(prev.font)
+                        and (_ends_with_connector(" ".join(s.text for s in cur)) or _starts_with_connector(" ".join(s.text for s in ln)))
+                    )
                     # Yapı sayfasında olmayan çok satırlı başlık (Fen s.88 "ÖĞRENCİ" + "PROFİLİ"): hiçbir
                     # satırı bilinen bir başlığa uymuyorsa yalnızca sıkı layout ile birleştirilir;
                     # sonuç yine bilinmeyen başlık (NEEDS_REVIEW) olarak raporlanır.
@@ -193,6 +200,22 @@ def _pull_aligned_rows(prev: _RawSection, lab: _Label) -> list[Span]:
     return moved
 
 
+# Yalnızca bağlaç kelimeleri: "/" ile biten satır ayrı başlık olabilir ("Genellemeler/" + "Anahtar Kavramlar")
+_CONNECTOR_END_RE = re.compile(r"\s(?:ve|ile|veya|ya da)\s*$", re.I)
+
+
+def _ends_with_connector(text: str) -> bool:
+    return bool(_CONNECTOR_END_RE.search(text.replace("İ", "i").replace("I", "ı")))
+
+
+_CONNECTOR_START_RE = re.compile(r"^\s*(?:ve|ile|veya|ya da)\s", re.I)
+
+
+def _starts_with_connector(text: str) -> bool:
+    """Bağlaçla başlayan başlık satırı öncekinin devamıdır ("ÖĞRENME ÇIKTILARI" + "VE SÜREÇ" + "BİLEŞENLERİ")."""
+    return bool(_CONNECTOR_START_RE.search(text.replace("İ", "i").replace("I", "ı")))
+
+
 def _known_start(text: str, vocab: list[str]) -> bool:
     n = norm_label(text)
     return bool(n) and (any(v.startswith(n) for v in vocab) or label_prefix_variant(n, vocab) or label_variant_of(n, vocab) is not None)
@@ -211,6 +234,11 @@ def _finish_label(spans: list[Span], vocab: list[str], schema: ProgramSchema) ->
     if v is not None:
         # yazım varyantı: öğrenilmiş başlığa eşlenir, ham metin korunur, raporda NEEDS_REVIEW
         return _Label(spans=spans, norm=v, known=True, variant_of=n)
+    # Bilinen başlığın "ve …" ile uzatılmış hali ("ÖĞRENME ÇIKTILARI" -> "ÖĞRENME ÇIKTILARI VE SÜREÇ BİLEŞENLERİ"):
+    # tek aday varsa o başlığa eşlenir, ham metin korunur, raporda NEEDS_REVIEW (yazım varyantı gibi)
+    ext = [v for v in vocab if len(v) >= 8 and n.startswith(v + "ve") and len(n) > len(v) + 2]
+    if len(ext) == 1:
+        return _Label(spans=spans, norm=ext[0], known=True, variant_of=n)
     return _Label(spans=spans, norm=n, known=False)
 
 

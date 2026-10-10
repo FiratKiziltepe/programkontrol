@@ -116,3 +116,24 @@ def test_lo_code_from_example_accepts_new_shapes():
 
     assert lo_code_from_example("EBRU.I.1.1.") == ("EBRU", ["a", "n", "n"])
     assert lo_code_from_example("MOY.1.1.") == ("MOY", ["n", "n"])
+
+
+def test_label_connectors():
+    from unit_extract import _ends_with_connector, _starts_with_connector
+
+    assert _ends_with_connector("ÖĞRENME ÇIKTILARI VE ") and _starts_with_connector("VE SÜREÇ ")
+    assert not _ends_with_connector("Genellemeler/")  # "/" ile biten satır ayrı başlık olabilir
+    assert not _ends_with_connector("ALAN BECERİLERİ") and not _starts_with_connector("VERİLER")
+
+
+def test_rotated_repeated_text_is_furniture():
+    from models import Span
+    from pdf_extract import detect_furniture
+
+    def sp(i, page, text, y=400):
+        return Span(id=f"P{page}_S{i}", page=page, text=text, bbox=(-41, -35, 600, y), font="Helvetica-Bold", size=44, color=0, flags=0, block=0, line=0)
+
+    spans = [sp(1, p, f"{p}99848461 - 2899848461") for p in range(1, 6)] + [sp(2, 1, "EBRU.I.1.1.")]
+    rotated = {s.id for s in spans[:5]}
+    furn = detect_furniture(spans, {p: (595, 842) for p in range(1, 6)}, 5, rotated)
+    assert rotated <= furn and "P1_S2" not in furn

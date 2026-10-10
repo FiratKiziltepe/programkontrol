@@ -324,7 +324,8 @@ def locate_structure(doc: PdfDoc, body: frozenset[int], titles: list[Span]) -> t
     pages = [sample.page]
     for p in range(sample.page + 1, doc.page_count + 1):
         spans = _content_spans(doc, p)
-        big = any(x.size >= stop_size * 0.95 for x in spans)
+        # Büyük puntolu örnek kod (ör. yapı şemasındaki "EBRU.I.1.1." açıklaması) başlık değildir
+        big = any(x.size >= stop_size * 0.95 and not LO_SHAPE_RE.match(x.text) for x in spans)
         has_title = any(x.id in {t.id for t in titles} for x in spans)
         if big or has_title or not spans:
             break

@@ -39,14 +39,18 @@ def extract_spans(path: str) -> PdfDoc:
     spans: list[Span] = []
     sizes: dict[int, tuple[float, float]] = {}
     removed: dict[int, int] = {}
+    rotated: set[str] = set()  # yatay olmayan satırlardaki span'ler (filigran adayı)
     for pno, page in enumerate(doc, start=1):
         sizes[pno] = (page.rect.width, page.rect.height)
         idx = 0
         data = page.get_text("dict")
         for bno, block in enumerate(data["blocks"]):
             for lno, line in enumerate(block.get("lines", [])):
+                tilted = abs(line.get("dir", (1.0, 0.0))[1]) > 0.1
                 for sp in line["spans"]:
                     idx += 1
+                    if tilted:
+                        rotated.add(f"P{pno}_S{idx}")
                     spans.append(
                         Span(
                             id=f"P{pno}_S{idx}",
@@ -63,7 +67,7 @@ def extract_spans(path: str) -> PdfDoc:
                     )
     page_count = doc.page_count
     doc.close()
-    furniture = detect_furniture(spans, sizes, page_count)
+    furniture = detect_furniture(spans, sizes, page_count, rotated)
     return PdfDoc(path, page_count, sizes, spans, furniture, removed)
 
 
@@ -80,10 +84,12 @@ def _visible(text: str, page: int, removed: dict[int, int]) -> str:
     return out
 
 
-def detect_furniture(spans: list[Span], sizes: dict[int, tuple[float, float]], page_count: int) -> set[str]:
-    """Sayfa kenar bandında tekrar eden metinleri (üst bilgi) ve sayfa numaralarını bulur.
+def detect_furniture(spans: list[Span], sizes: dict[int, tuple[float, float]], page_count: int, rotated: set[str] = frozenset()) -> set[str]:
+    """Sayfa kenar bandında tekrar eden metinleri (üst bilgi), sayfa numaralarını ve filigranları bulur.
 
-    Program bazında metin hardcode edilmez: tekrar sıklığı ve konumdan öğrenilir.
+    Filigran: yatay olmayan (döndürülmüş) satırda, sayfaların çoğunda aynı biçimde tekrar eden metin (ör. indirilen
+    PDF'lere basılmış çapraz kimlik damgası "899848461 - 2899848461 - …"). Program bazında metin hardcode edilmez:
+    tekrar sıklığı, yön ve konumdan öğrenilir.
     """
     band = 0.075
     in_band: list[Span] = []
@@ -97,6 +103,13 @@ def detect_furniture(spans: list[Span], sizes: dict[int, tuple[float, float]], p
         if t:
             shape_pages[re.sub(r"\d+", "#", t)].add(s.page)
     furniture: set[str] = set()
+    tilted_pages: dict[str, set[int]] = defaultdict(set)
+    for s in spans:
+        if s.id in rotated and s.text.strip():
+            tilted_pages[re.sub(r"\d+", "#", s.text.strip())].add(s.page)
+    for s in spans:
+        if s.id in rotated and s.text.strip() and len(tilted_pages[re.sub(r"\d+", "#", s.text.strip())]) >= max(3, page_count * 0.3):
+            furniture.add(s.id)
     for s in in_band:
         t = s.text.strip()
         if not t:
