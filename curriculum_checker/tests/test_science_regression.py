@@ -215,13 +215,13 @@ def test_structure_found_without_heading_hint(monkeypatch):
 
 
 def test_used_not_declared_listed_under_its_category():
-    # Fen U37: D1.4 uygulamada kullanılmış ama Değerler'de tanımlı değil -> Değerler satırında görünür
+    # Fen U37 (7. SINIF · 7. ÜNİTE): D1.4 uygulamada kullanılmış ama Değerler'de tanımlı değil -> Değerler satırında görünür
     from excel_export import code_checks_df
 
     df = code_checks_df(res("fen"))
     row = df[df["Kullanılmış ama tanımlı değil"] != ""]
     assert list(zip(row["Birim"], row["Kategori"], row["Kullanılmış ama tanımlı değil"])) == [
-        ("U37", "PROGRAMLAR ARASI BİLEŞENLER > Değerler", "D1.4")
+        ("7. SINIF · 7. ÜNİTE", "PROGRAMLAR ARASI BİLEŞENLER > Değerler", "D1.4")
     ]
 
 

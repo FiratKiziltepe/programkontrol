@@ -19,11 +19,11 @@ from dataclasses import dataclass, field
 
 import fitz
 
+from labels_tr import DETAIL_TR, SEVERITY_TR, SKIP_DETAILS, check_tr, unit_labels
 from models import ExtractionResult, Finding, Section, Unit
 from pdf_extract import parse_code
 from pdf_locate import Loc, Locator, Rect
 
-SEVERITY_TR = {"FAIL": "Hata", "NEEDS_REVIEW": "İnceleme gerekli", "WARNING": "Uyarı", "INFO": "Bilgi"}
 # (çizgi/başlık rengi, kutu dolgusu)
 SEVERITY_COLORS = {
     "FAIL": ((0.78, 0.12, 0.12), (1.0, 0.93, 0.93)),
@@ -45,37 +45,6 @@ LH = FS * 1.28
 _REG, _BOLD = fitz.Font("helv"), fitz.Font("hebo")
 AUTHOR = "Öğretim Programı Kontrol"
 
-DETAIL_TR = {
-    "code_raw": "Kod",
-    "code": "Kod",
-    "in_application_of": "Uygulama bloğu",
-    "category": "Bölüm",
-    "expected": "Beklenen",
-    "extracted": "Bulunan",
-    "found": "Bulunan",
-    "diff": "Fark",
-    "letters": "Harfler",
-    "labels": "Başlıklar",
-    "table": "Özet tablodaki ad",
-    "unit_name": "Tema başlığındaki ad",
-    "title": "Başlık",
-    "text": "Metin",
-    "where": "Yer",
-    "dominant_format": "Baskın biçim",
-    "previous_section": "Önceki bölüm",
-    "first_code_row": "İlk kod satırı",
-    "section": "Bölüm",
-    "label": "Başlık",
-    "count": "Adet",
-    "pages": "Sayfalar",
-    "raw": "Ham değer",
-    "candidates": "Aday sayısı",
-    "table_page": "Tablo sayfası",
-    "page": "Sayfa",
-    "normalized": "Normalize",
-    "entry": "Tanım girdisi",
-}
-SKIP_DETAILS = {"spans", "label_spans", "matched_label_norm"}
 SUMMARY_TABLE_CHECKS = {"LO_TOTAL_MISMATCH", "UNIT_COUNT_MISMATCH"}
 
 
@@ -118,7 +87,7 @@ def _first_anchor(loc: Loc, page: int) -> Rect | None:
 
 
 def _unit_label(u: Unit) -> str:
-    return " — ".join(x for x in (u.id, u.context.text if u.context else "", u.title.text) if x).replace("\n", " ")
+    return " · ".join(x for x in (u.context.text if u.context else "", u.title.text) if x).replace("\n", " ")
 
 
 def _decl_sections(res: ExtractionResult, u: Unit, code_raw: str) -> tuple[str | None, list[Section]]:
@@ -217,6 +186,7 @@ def _highlight(page: fitz.Page, rects: list[Rect], color, title: str, content: s
 
 def build_annotated_pdf(res: ExtractionResult, findings: list[Finding], L: Locator) -> bytes:
     units = {u.id: u for u in res.units}
+    ul = unit_labels(res)
     notes: list[_Note] = []
     marks: list[tuple[int, list[Rect], tuple, str, str]] = []  # (sayfa, kutular, renk, başlık, not)
     evidence: dict[tuple[str, str | None, str], _Evidence] = {}
@@ -228,7 +198,7 @@ def build_annotated_pdf(res: ExtractionResult, findings: list[Finding], L: Locat
         u = units.get(f.unit_id or "")
         loc = L.finding_loc(f)
         sev = f.severity.value
-        head = f"#{num} {SEVERITY_TR.get(sev, sev)} · {f.check}" + (f" · {f.unit_id}" if f.unit_id else "")
+        head = f"#{num} {SEVERITY_TR.get(sev, sev)} · {check_tr(f.check)}" + (f" · {ul.get(f.unit_id, f.unit_id)}" if f.unit_id else "")
         lines = [f.message] + detail_lines(f)
         if loc.note:
             lines.append(loc.note)
@@ -245,13 +215,13 @@ def build_annotated_pdf(res: ExtractionResult, findings: list[Finding], L: Locat
             lines.append("Bu bulgunun PDF'de konumu yok; not ilk sayfaya konuldu.")
         content = "\n".join([head] + lines)
         for p in marked:
-            marks.append((p, loc.rects[p], FINDING_HIGHLIGHT, f.check, content))
+            marks.append((p, loc.rects[p], FINDING_HIGHLIGHT, check_tr(f.check), content))
         n = _Note(page, _first_anchor(loc, page), head, lines, SEVERITY_COLORS.get(sev, SEVERITY_COLORS["INFO"]), num)
         notes.append(n)
         finding_notes[num] = n
         for p in marked[1:]:
-            notes.append(_Note(p, _first_anchor(loc, p), f"#{num} (devam) · {f.check}", [f"İlk işaret: s.{page}"], n.colors))
-        toc_items.append((f.unit_id or "", num, page, n.anchor, f"#{num} {SEVERITY_TR.get(sev, sev)} · {f.check}" + (f" · {f.details['code_raw']}" if f.details.get("code_raw") else "")))
+            notes.append(_Note(p, _first_anchor(loc, p), f"#{num} (devam) · {check_tr(f.check)}", [f"İlk işaret: s.{page}"], n.colors))
+        toc_items.append((f.unit_id or "", num, page, n.anchor, f"#{num} {SEVERITY_TR.get(sev, sev)} · {check_tr(f.check)}" + (f" · {f.details['code_raw']}" if f.details.get("code_raw") else "")))
 
         if f.check == "USED_NOT_DECLARED" and u is not None and f.details.get("code_raw"):
             prefix, secs = _decl_sections(res, u, f.details["code_raw"])
@@ -259,7 +229,7 @@ def build_annotated_pdf(res: ExtractionResult, findings: list[Finding], L: Locat
                 key = (u.id, s.path if s is not None else None, prefix or "")
                 ev = evidence.get(key)
                 if ev is None:
-                    eloc = L.section_loc(u, s) if s is not None else L.fields_loc(f"{u.id} — tema başlığı", [u.title])
+                    eloc = L.section_loc(u, s) if s is not None else L.fields_loc(f"{ul[u.id]} — tema başlığı", [u.title])
                     ev = evidence[key] = _Evidence(u, s, eloc)
                 ev.codes.append((f.details["code_raw"], num))
                 ev.usage.append((page, n.anchor))
@@ -271,11 +241,11 @@ def build_annotated_pdf(res: ExtractionResult, findings: list[Finding], L: Locat
         used = ", ".join(f"{c} (#{k})" for c, k in ev.codes)
         if ev.section is not None:
             declared = [d.code.normalized for d in ev.unit.declarations.get(ev.section.path, []) if d.code.prefix == prefix]
-            head = f"Kanıt · {uid} tanım bölümü: {ev.section.path}"
+            head = f"Kanıt · {ul[uid]} tanım bölümü: {ev.section.path}"
             lines = [f"Uygulamalarda kullanılmış, bu bölümde tanımlı değil: {used}"]
             lines.append(f"Bu bölümde tanımlı {prefix} kodları: {', '.join(declared)}" if declared else f"Bu bölümde {prefix} önekli tanım yok.")
         else:
-            head = f"Kanıt · {uid} tanım bölümleri"
+            head = f"Kanıt · {ul[uid]} tanım bölümleri"
             lines = [f"Temanın hiçbir tanım bölümünde {prefix} önekli kod tanımlanmamış.", f"Uygulamalarda kullanılan: {used}"]
         if ev.loc.note:
             lines.append(ev.loc.note)

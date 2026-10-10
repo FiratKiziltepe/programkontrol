@@ -32,6 +32,7 @@ from excel_export import (
     STATUS_COLORS,
     build_comparison_excel,
     build_pdf_excel,
+    cmp_display,
     code_checks_df,
     findings_df,
     los_df,
@@ -39,6 +40,7 @@ from excel_export import (
     units_df,
 )
 import manual_schema
+from labels_tr import CMP_TR, SEVERITY_ORDER, SEVERITY_TR, STATUS_TR, unit_labels
 import pdf_annotate
 import pdf_locate
 import pdf_view
@@ -53,21 +55,6 @@ from validators import analyze_pdf, ignore_checks
 st.set_page_config(page_title="Öğretim Programı Kontrol", page_icon="📘", layout="wide")
 
 TESTED_PYMUPDF = "1.23.26"  # requirements.txt ile aynı tutulmalı
-SEVERITY_ORDER = ["FAIL", "NEEDS_REVIEW", "WARNING", "INFO"]
-SEVERITY_TR = {"FAIL": "Hata", "NEEDS_REVIEW": "İnceleme gerekli", "WARNING": "Uyarı", "INFO": "Bilgi"}
-STATUS_TR = {"PASS": "Geçti", "WARNING": "Uyarılarla geçti", "NEEDS_REVIEW": "İnceleme gerekli", "FAIL": "Hata"}
-CMP_TR = {
-    "AYNI": "Aynı",
-    "SADECE_BİÇİM_FARKI": "Yalnızca biçim farkı",
-    "PDF_DE_VAR_EXCELDE_YOK": "PDF'de var, Excel'de yok",
-    "EXCELDE_VAR_PDF_DE_YOK": "Excel'de var, PDF'de yok",
-    "YANLIŞ_BÖLÜM": "Yanlış bölüm",
-    "KOD_FARKLI": "Kod farklı",
-    "METİN_FARKLI": "Metin farklı",
-    "SAYI_FARKLI": "Sayı farklı",
-    "İNCELEME_GEREKLİ": "İnceleme gerekli",
-    "KAPSAM_DIŞI": "Kapsam dışı",
-}
 TEXT_COLS = {"Metin", "ÖÇ başlığı", "Bileşen metni", "PDF değeri", "Excel değeri", "Açıklama", "Ayrıntı"}
 
 
@@ -225,8 +212,7 @@ with tab_pdf:
     if res is None:
         st.info("Başlamak için bir PDF yükleyip **PDF'yi Analiz Et** düğmesine basın.")
     else:
-        fdf = findings_df(res)
-        sev = fdf["Önem"].value_counts() if not fdf.empty else {}
+        sev = pd.Series([f.severity.value for f in res.findings], dtype=object).value_counts()
         c1, c2, c3, c4, c5 = st.columns(5)
         c1.metric("Genel durum", STATUS_TR.get(res.status.value, res.status.value))
         exp_units = res.expected_unit_count if res.expected_lo_total is not None else None
@@ -257,7 +243,7 @@ with tab_pdf:
         st.caption(pdf_view.HINT)
         units_table(res, "loc_units_1")
 
-        units = {u.id: f"{u.id} — {(u.context.text + ' | ') if u.context else ''}{u.title.text}".replace("\n", " ") for u in res.units}
+        units = {u.id: _unit_label(u) for u in res.units}
         choice = st.selectbox("İçeriğini görmek istediğiniz tema", ["Tümü", *units], format_func=lambda k: units.get(k, "Tüm temalar"))
         uid = None if choice == "Tümü" else choice
         view = st.radio("Görünüm", ["Bölümler", "Öğrenme çıktıları"], horizontal=True)
@@ -273,7 +259,7 @@ with tab_pdf:
                 u, lo, comp = refs[r]
                 if col == "Kullanılan kodlar (uygulama)":
                     spans = L.block_spans(u, lo.code.normalized)
-                    return [(c, L.code_loc(f"{u.id} — {lo.code.raw} uygulamasında {c}", [c], spans)) for c in pdf_locate.split_codes(table.iloc[r][col])] or None
+                    return [(c, L.code_loc(f"{L.ul[u.id]} — {lo.code.raw} uygulamasında {c}", [c], spans)) for c in pdf_locate.split_codes(table.iloc[r][col])] or None
                 return L.lo_loc(u, lo, comp)
         else:
             refs = [(u, s) for u in chosen_units for s in u.sections]
@@ -314,10 +300,11 @@ with tab_checks:
         else:
             f1, f2, f3 = st.columns([1, 2, 1])
             sev_sel = f1.multiselect(
-                "Önem", SEVERITY_ORDER, default=["FAIL", "NEEDS_REVIEW"], format_func=lambda s: SEVERITY_TR.get(s, s)
+                "Önem", [SEVERITY_TR[s] for s in SEVERITY_ORDER], default=[SEVERITY_TR["FAIL"], SEVERITY_TR["NEEDS_REVIEW"]], placeholder="Seçin (boş: tümü)"
             )
-            chk_sel = f2.multiselect("Kontrol", sorted(fdf["Kontrol"].unique()))
-            unit_sel = f3.multiselect("Birim", sorted(u for u in fdf["Birim"].unique() if u))
+            chk_sel = f2.multiselect("Kontrol", sorted(fdf["Kontrol"].unique()), placeholder="Seçin (boş: tümü)")
+            present = set(fdf["Birim"])
+            unit_sel = f3.multiselect("Birim", [lbl for lbl in unit_labels(res).values() if lbl in present], placeholder="Seçin (boş: tümü)")
             view = fdf[fdf["Önem"].isin(sev_sel)] if sev_sel else fdf
             if chk_sel:
                 view = view[view["Kontrol"].isin(chk_sel)]
@@ -394,12 +381,12 @@ GEMINI_STATUS_TR = {
 GEMINI_COLORS = {"UYUMLU": "PASS", "YALNIZCA_PDF_CIKARIMI": "NEEDS_REVIEW", "YALNIZCA_GEMINI": "NEEDS_REVIEW", "HATA": "INFO"}
 
 
-def _gemini_df(report) -> pd.DataFrame:
+def _gemini_df(report, ul: dict[str, str]) -> pd.DataFrame:
     return pd.DataFrame(
         [
             {
                 "Sayfa": c.page,
-                "Birim": c.unit_id or "",
+                "Birim": ul.get(c.unit_id or "", c.unit_id or ""),
                 "Tür": gemini_verify.KIND_TR.get(c.kind, c.kind),
                 "Durum": GEMINI_STATUS_TR.get(c.status, c.status),
                 "PDF çıkarımı": c.extracted or "",
@@ -424,8 +411,8 @@ with tab_gemini:
             "istenir; bu liste PDF'den çıkarılan yapıyla karşılaştırılır, uyuşmayan yerler **İnceleme gerekli** olur. "
             "Gemini'nin yazdığı metin çıkarıma, Excel'e veya karşılaştırmaya **girmez**."
         )
-        units = {u.id: f"{u.id} — {(u.context.text + ' | ') if u.context else ''}{u.title.text}".replace("\n", " ") for u in res.units}
-        chosen = st.multiselect("Doğrulanacak temalar", list(units), default=list(units)[:1], format_func=units.get)
+        units = {u.id: _unit_label(u) for u in res.units}
+        chosen = st.multiselect("Doğrulanacak temalar", list(units), default=list(units)[:1], format_func=units.get, placeholder="Tema seçin")
         n_pages = len(gemini_verify.unit_pages(res, chosen))
         st.caption(f"{n_pages} sayfa (her sayfa ayrı bir Gemini isteği).")
         if st.button("Sayfaları hazırla", disabled=not chosen):
@@ -449,7 +436,7 @@ with tab_gemini:
 
         report = st.session_state.get("gemini")
         if report is not None:
-            gdf = _gemini_df(report)
+            gdf = _gemini_df(report, unit_labels(res))
             counts = gdf["Durum"].value_counts() if not gdf.empty else {}
             for col, code in zip(st.columns(4), GEMINI_STATUS_TR):
                 col.metric(GEMINI_STATUS_TR[code], int(counts.get(GEMINI_STATUS_TR[code], 0)))
@@ -511,10 +498,10 @@ with tab_cmp:
                     c.metric(CMP_TR[s], int(counts.get(s, 0)))
 
             default = [s for s in STATUSES if s not in (AYNI, BICIM, KAPSAM_DISI)]
-            durum_sel = st.multiselect("Durum", STATUSES, default=default, format_func=CMP_TR.get)
+            durum_sel = st.multiselect("Durum", STATUSES, default=default, format_func=CMP_TR.get, placeholder="Seçin (boş: tümü)")
             g2, g3 = st.columns(2)
-            alan_sel = g2.multiselect("Alan / sütun", sorted(cmp_df["Alan / sütun"].unique()))
-            tema_sel = g3.multiselect("Tema", sorted(t for t in cmp_df["Tema (PDF)"].unique() if t))
+            alan_sel = g2.multiselect("Alan / sütun", sorted(cmp_df["Alan / sütun"].unique()), placeholder="Seçin (boş: tümü)")
+            tema_sel = g3.multiselect("Tema", sorted(t for t in cmp_df["Tema (PDF)"].unique() if t), placeholder="Seçin (boş: tümü)")
             q = st.text_input("Ara (öğrenme çıktısı kodu, öğe veya metin)")
             view = cmp_df
             if durum_sel:
@@ -535,8 +522,9 @@ with tab_cmp:
                 title = " — ".join(x for x in (row["Öğrenme çıktısı"], row["Alan / sütun"], row["Öğe"]) if x)
                 return cL.text_loc(units_by_name.get(row["Tema (PDF)"]), row["PDF değeri"], pdf_locate.page_list(row["PDF sayfa"]), title, row["Öğe"])
 
+            shown = cmp_display(view)
             pdf_view.clickable_dataframe(
-                style_by(view, "Durum"), "loc_cmp", _cmp_loc, res, hide_index=True, width="stretch", height=560, column_config=col_config(view)
+                style_by(shown, "Durum"), "loc_cmp", _cmp_loc, res, hide_index=True, width="stretch", height=560, column_config=col_config(shown)
             )
 
 # ---------------------------------------------------------------- 5. Rapor
@@ -554,8 +542,10 @@ with tab_report:
             f"öğrenme çıktısı {res.extracted_lo_total} (süre tablosunda beklenen: {_expected(res.expected_lo_total)})."
         )
         if not fdf.empty:
+            rank = {SEVERITY_TR[s]: i for i, s in enumerate(SEVERITY_ORDER)}
             st.dataframe(
-                fdf.groupby(["Önem", "Kontrol"]).size().reset_index(name="Adet").sort_values(["Önem", "Adet"], ascending=[True, False]),
+                fdf.groupby(["Önem", "Kontrol", "Kod"]).size().reset_index(name="Adet")
+                .sort_values(["Önem", "Adet"], key=lambda c: c.map(rank) if c.name == "Önem" else -c),
                 hide_index=True,
                 width="stretch",
             )
@@ -565,9 +555,9 @@ with tab_report:
         else:
             st.subheader("Excel karşılaştırması")
             summ = summary(cmp_df)
-            st.dataframe(style_by(summ, "Durum"), hide_index=True, width="content")
+            st.dataframe(style_by(cmp_display(summ), "Durum"), hide_index=True, width="content")
             st.dataframe(
-                cmp_df.groupby(["Alan / sütun", "Durum"]).size().reset_index(name="Adet"),
+                cmp_display(cmp_df).groupby(["Alan / sütun", "Durum"]).size().reset_index(name="Adet"),
                 hide_index=True,
                 width="stretch",
             )

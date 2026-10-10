@@ -227,6 +227,9 @@ Veri başlangıç sayfasından itibaren, mobilya dışı span'lar okuma sırası
 ## 5. PDF iç kontrolleri ve bulgular
 
 Önem dereceleri: **INFO** (bilgi, durumu etkilemez) < **WARNING** (geçer) < **NEEDS_REVIEW** < **FAIL**.
+Arayüzde ve raporlarda Türkçe gösterilir (Bilgi < Uyarı < İnceleme gerekli < Hata); kontrol adları da Türkçedir
+(ör. `USED_NOT_DECLARED` → "Tanımlanmamış kod kullanılmış"), iç kod bulgular tablosunun son "Kod" sütunundadır.
+Birimler U01 yerine PDF'deki bağlam + numarayla gösterilir (`labels_tr.py`).
 Birim/program durumu en ağır bulguya göre: PASS / WARNING / NEEDS_REVIEW / FAIL.
 
 | Kontrol | Başlıca bulgular |
@@ -356,6 +359,7 @@ Gemini'nin yanıtları döner. Varsayılan model `gemini-3.5-flash-lite` (arayü
 | `grid_tab.py` | 6. sekme |
 | `pdf_locate.py` | Hücrenin PDF'deki yeri (sayfa + işaret kutuları), deterministik |
 | `pdf_view.py` | "PDF'de göster" diyaloğu, sarı işaretli sayfa görüntüsü, tıklanabilir tablo yardımcısı |
+| `labels_tr.py` | Gösterim adları: kontrol kodları, önem/durum, karşılaştırma durumları, birim adı (U01 → "6. SINIF · 1. TEMA"). İç kodlar değişmez |
 | `pdf_annotate.py` | İşaretli PDF: vurgular, sağ şeritte açıklama kutuları, tanımsız kod için tanım bölümü kanıtı, yer imleri |
 | `review_report.py` | İnceleme raporu (Markdown/Word), nihai tablo Excel'i, Gemini rapor istemi |
 | `gemini_verify.py`, `gemini_component.py` | 3. sekme: sayfa görüntüleri, yanıt doğrulama, tarayıcı bileşeni |

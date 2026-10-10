@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 from typing import Iterable
 
 from compare import IGNORED_NAME_SUFFIX, Comparer, without_name_suffix
-from excel_export import SYSTEM_HEADERS, SYSTEM_LO_CODE_COLUMNS, lo_code_column_codes, section_for_header
+from excel_export import SYSTEM_HEADERS, _unit_label, SYSTEM_LO_CODE_COLUMNS, lo_code_column_codes, section_for_header
 from excel_import import Cell, ExcelLO, ExcelTheme, SystemExcel, code_items, strip_placeholder
 from models import ExtractionResult, SectionKind, Unit
 from pdf_extract import PdfDoc, compare_key, group_rows, nfc, norm_label, parse_code, row_text, tr_lower
@@ -441,7 +441,7 @@ def build_grid(res: ExtractionResult, xl: SystemExcel, scope: set[str] | None = 
     for i, t in enumerate(xl.themes):
         u = matched.get(i)
         if u is not None and u.id in used_units:
-            grid.notes.append(f"Aynı PDF birimine birden fazla Excel teması eşleşti: {u.id}")
+            grid.notes.append(f"Aynı PDF birimine birden fazla Excel teması eşleşti: {_unit_label(u)}")
             u = None
         if u is not None:
             used_units.add(u.id)

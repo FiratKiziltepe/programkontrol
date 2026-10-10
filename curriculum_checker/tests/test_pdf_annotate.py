@@ -69,7 +69,7 @@ def test_annotated_pdf_used_not_declared(arn):
     assert up.rect.width > orig[usage_page - 1].rect.width  # açıklama şeridi
     # PDF'nin kendi metni değişmez
     assert up.get_text("text", clip=orig[usage_page - 1].rect) == orig[usage_page - 1].get_text("text")
-    hl = [a for a in up.annots() if a.type[0] == fitz.PDF_ANNOT_HIGHLIGHT and a.info["subject"] == "USED_NOT_DECLARED"]
+    hl = [a for a in up.annots() if a.type[0] == fitz.PDF_ANNOT_HIGHLIGHT and a.info["subject"] == "Tanımlanmamış kod kullanılmış"]
     assert any("SDB2.6" in a.info["content"] for a in hl)
 
     # Kanıt: temanın Sosyal-Duygusal tanım bölümü mavi işaretli, tanımlı SDB kodları yazılı; kutular bağlantılı
@@ -102,3 +102,25 @@ def test_annotated_pdf_all_findings_listed(arn):
     out = fitz.open(stream=data)
     toc = out.get_toc()
     assert sum(1 for t in toc if t[0] == 3) == len(res.findings)
+
+
+def test_turkish_labels_cover_all_checks():
+    """Arayüz/raporlarda İngilizce kontrol kodu ve U01 gibi kimlik görünmez; iç kod yalnızca "Kod" sütunundadır."""
+    import glob
+
+    from excel_export import findings_df, units_df
+    from labels_tr import CHECK_TR, unit_labels
+    from validators import analyze_pdf
+
+    pdfs = sorted(glob.glob(str(SAMPLES / "*.pdf")))
+    if not pdfs:
+        pytest.skip("örnek PDF yok")
+    for p in pdfs:
+        res = analyze_pdf(p)
+        assert {f.check for f in res.findings} <= set(CHECK_TR), p
+        labels = list(unit_labels(res).values())
+        assert len(labels) == len(set(labels)), p  # birim adları tekil
+        fdf = findings_df(res)
+        assert not fdf["Kontrol"].isin(CHECK_TR.keys()).any() and set(fdf["Önem"]) <= {"Hata", "İnceleme gerekli", "Uyarı", "Bilgi"}
+        assert list(fdf["Kod"]) == [f.check for f in res.findings]
+        assert not units_df(res)["Birim"].str.fullmatch(r"U\d+").any()

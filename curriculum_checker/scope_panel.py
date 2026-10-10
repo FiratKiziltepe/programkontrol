@@ -96,7 +96,7 @@ def scope_panel(res, xl: SystemExcel, pdf_digest: str, xl_key: str, tab: str) ->
         st.dataframe(overview, hide_index=True, width="stretch")
         if gkey not in st.session_state:
             st.session_state[gkey] = list(st.session_state[shared_groups])
-        chosen = st.multiselect("Karşılaştırılacak gruplar", [g.name for g in groups], key=gkey, on_change=sync_groups)
+        chosen = st.multiselect("Karşılaştırılacak gruplar", [g.name for g in groups], key=gkey, on_change=sync_groups, placeholder="Grup seçin")
         in_groups = [uid for g in groups if g.name in chosen for uid in g.unit_ids]
         excluded = set(st.session_state[shared_excl])
         with st.expander("Tema bazında düzelt", expanded=bool(excluded)):

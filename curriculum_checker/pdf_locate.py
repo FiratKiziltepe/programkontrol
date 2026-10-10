@@ -16,6 +16,7 @@ from typing import Iterable
 
 import fitz
 
+from labels_tr import check_tr, unit_labels
 from models import ExtractionResult, Finding, LearningOutcome, ProcessComponent, Section, TextField, Unit
 from pdf_extract import PdfDoc
 
@@ -71,6 +72,7 @@ class Locator:
         self.res, self.doc, self.path = res, doc, res.source
         self.span = {s.id: s for s in doc.spans}
         self.units = {u.id: u for u in res.units}
+        self.ul = unit_labels(res)  # gösterim: U01 yerine PDF'deki bağlam + numara
 
     # ------------------------------------------------------------ temel yapı taşları
     def span_rects(self, ids: Iterable[str]) -> dict[int, list[Rect]]:
@@ -119,16 +121,16 @@ class Locator:
 
     # ------------------------------------------------------------ birim içi aramalar
     def unit_loc(self, u: Unit) -> Loc:
-        return self.fields_loc(f"{u.id} — tema başlığı", _fields(u.context, u.title))
+        return self.fields_loc(f"{self.ul[u.id]} — tema başlığı", _fields(u.context, u.title))
 
     def section_loc(self, u: Unit, s: Section) -> Loc:
-        return self.fields_loc(f"{u.id} — {s.path or 'başlıksız bölüm'}", _fields(s.label, s.content))
+        return self.fields_loc(f"{self.ul[u.id]} — {s.path or 'başlıksız bölüm'}", _fields(s.label, s.content))
 
     def lo_loc(self, u: Unit, lo: LearningOutcome, comp: ProcessComponent | None = None) -> Loc:
         fs = _fields(lo.header or lo.title)
         if comp is not None:
             fs += _fields(comp.full or comp.text)
-        return self.fields_loc(f"{u.id} — {lo.code.raw}" + (f" {comp.marker}" if comp is not None and comp.marker else ""), fs)
+        return self.fields_loc(f"{self.ul[u.id]} — {lo.code.raw}" + (f" {comp.marker}" if comp is not None and comp.marker else ""), fs)
 
     def block_spans(self, u: Unit, lo_normalized: str) -> list[str]:
         return [
@@ -148,7 +150,7 @@ class Locator:
             for d in lst
             if d.code.normalized == code or d.code.raw.rstrip(".") == code
         ]
-        title = f"{u.id} — {code} (tanım)"
+        title = f"{self.ul[u.id]} — {code} (tanım)"
         if not ds:
             return Loc(title, list(u.pages[:1]), note=NOT_FOUND)
         ids = [i for d in ds for i in d.entry.source_spans]
@@ -163,7 +165,7 @@ class Locator:
             if hits or code in b.malformed_codes:
                 raws += [c.raw for c in hits]
                 ids += [i for f in _fields(b.header, b.body) for i in f.source_spans]
-        title = f"{u.id} — {code} (uygulamalarda kullanım)"
+        title = f"{self.ul[u.id]} — {code} (uygulamalarda kullanım)"
         if not ids:
             return self.code_loc(title, [code], pages=u.pages)
         return self.code_loc(title, raws, ids)
@@ -189,7 +191,7 @@ class Locator:
         t = (text or "").strip()
         units = [u] if u is not None else self.res.units
         hits = [f for x in units for f in self.unit_fields(x) if t and f.text.strip() == t and (not pages or set(f.pages) & set(pages))]
-        title = title or (u.id if u else "")
+        title = title or (self.ul[u.id] if u else "")
         if hits:
             if code and CODE_LIKE.match(code):
                 loc = self.code_loc(title, [code], [i for f in hits for i in f.source_spans])
@@ -224,7 +226,7 @@ class Locator:
     # ------------------------------------------------------------ bulgular
     def finding_loc(self, f: Finding) -> Loc:
         d, u = f.details, self.units.get(f.unit_id or "")
-        title = f"{f.check}" + (f" — {f.unit_id}" if f.unit_id else "")
+        title = check_tr(f.check) + (f" — {self.ul.get(f.unit_id, f.unit_id)}" if f.unit_id else "")
         ids = list(d.get("spans") or []) + list(d.get("label_spans") or [])
         if ids:
             return self.spans_loc(title, ids)

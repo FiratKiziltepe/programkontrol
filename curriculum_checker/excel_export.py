@@ -14,6 +14,7 @@ from openpyxl import Workbook
 from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
 from openpyxl.styles import Alignment, Font, PatternFill
 
+from labels_tr import CMP_TR, SECTION_KIND_TR, SEVERITY_TR, STATUS_TR, check_tr, detail_text, unit_labels
 from models import Code, ExtractionResult, Section, SectionKind, Unit
 from pdf_extract import norm_label
 
@@ -55,6 +56,9 @@ STATUS_COLORS = {
     "KAPSAM_DIŞI": "EDEDED",  # karşılaştırma kapsamı dışında (fark değil)
     "YANLIŞ_BÖLÜM": "D9C3E9",
 }
+# Gösterimde Türkçe değerler kullanıldığında da aynı renkler (labels_tr)
+for _tr in (CMP_TR, SEVERITY_TR, STATUS_TR):
+    STATUS_COLORS.update({v: STATUS_COLORS[k] for k, v in _tr.items() if k in STATUS_COLORS})
 RED = "FFC7CE"
 
 
@@ -146,10 +150,11 @@ def _unit_label(u: Unit) -> str:
 
 def units_df(res: ExtractionResult) -> pd.DataFrame:
     rep = {r.unit_id: r for r in res.unit_reports}
+    ul = unit_labels(res)
     return pd.DataFrame(
         [
             {
-                "Birim": u.id,
+                "Birim": ul[u.id],
                 "Bağlam": u.context.text if u.context else "",
                 "Başlık": u.title.text,
                 "Sayfalar": f"{u.pages[0]}-{u.pages[-1]}",
@@ -157,7 +162,7 @@ def units_df(res: ExtractionResult) -> pd.DataFrame:
                 "Bulunan ÖÇ": rep[u.id].extracted_lo,
                 "Beklenen ders saati": rep[u.id].expected_hours,
                 "Bulunan ders saati": rep[u.id].extracted_hours,
-                "Durum": rep[u.id].status.value,
+                "Durum": STATUS_TR.get(rep[u.id].status.value, rep[u.id].status.value),
             }
             for u in res.units
         ]
@@ -166,16 +171,17 @@ def units_df(res: ExtractionResult) -> pd.DataFrame:
 
 def sections_df(res: ExtractionResult, unit_id: str | None = None) -> pd.DataFrame:
     rows = []
+    ul = unit_labels(res)
     for u in res.units:
         if unit_id and u.id != unit_id:
             continue
         for s in u.sections:
             rows.append(
                 {
-                    "Birim": u.id,
+                    "Birim": ul[u.id],
                     "Tema": _unit_label(u),
                     "Bölüm": s.path or ("(başlıksız: tema açıklaması)" if s.kind == SectionKind.UNIT_DESCRIPTION else "(başlıksız)"),
-                    "Tür": s.kind.value,
+                    "Tür": SECTION_KIND_TR.get(s.kind.value, s.kind.value),
                     "Metin": s.content.text if s.content else "",
                     "Sayfalar": ", ".join(map(str, s.content.pages)) if s.content else "",
                     "Kaynak span": ", ".join(s.content.source_spans[:3]) + (" …" if s.content and len(s.content.source_spans) > 3 else "") if s.content else "",
@@ -186,6 +192,7 @@ def sections_df(res: ExtractionResult, unit_id: str | None = None) -> pd.DataFra
 
 def los_df(res: ExtractionResult, unit_id: str | None = None) -> pd.DataFrame:
     rows = []
+    ul = unit_labels(res)
     for u in res.units:
         if unit_id and u.id != unit_id:
             continue
@@ -193,7 +200,7 @@ def los_df(res: ExtractionResult, unit_id: str | None = None) -> pd.DataFrame:
         for lo in u.learning_outcomes:
             b = blocks.get(lo.code.key)
             base = {
-                "Birim": u.id,
+                "Birim": ul[u.id],
                 "Tema": _unit_label(u),
                 "ÖÇ kodu (ham)": lo.code.raw,
                 "ÖÇ kodu (normalize)": lo.code.normalized,
@@ -208,28 +215,36 @@ def los_df(res: ExtractionResult, unit_id: str | None = None) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+FINDING_COLUMNS = ["Önem", "Kontrol", "Birim", "Açıklama", "Ayrıntı", "Kod"]
+
+
 def findings_df(res: ExtractionResult) -> pd.DataFrame:
+    """Bulgular, Türkçe gösterimle; "Kod" sütunu iç kontrol kodudur (arama ve hata bildirimi için)."""
+    ul = unit_labels(res)
     return pd.DataFrame(
         [
             {
-                "Önem": f.severity.value,
-                "Kontrol": f.check,
-                "Birim": f.unit_id or "",
+                "Önem": SEVERITY_TR.get(f.severity.value, f.severity.value),
+                "Kontrol": check_tr(f.check),
+                "Birim": ul.get(f.unit_id or "", f.unit_id or ""),
                 "Açıklama": f.message,
-                "Ayrıntı": ", ".join(f"{k}={v}" for k, v in f.details.items() if k not in ("spans", "label_spans"))[:400],
+                "Ayrıntı": detail_text(f.details),
+                "Kod": f.check,
             }
             for f in res.findings
-        ]
+        ],
+        columns=FINDING_COLUMNS,
     )
 
 
 def code_checks_df(res: ExtractionResult) -> pd.DataFrame:
     rows = []
+    ul = unit_labels(res)
     for r in res.unit_reports:
         for c in r.code_checks:
             rows.append(
                 {
-                    "Birim": r.unit_id,
+                    "Birim": ul.get(r.unit_id, r.unit_id),
                     "Kategori": c.category,
                     "Tanımlanan": ", ".join(c.declared),
                     "Kullanılan": ", ".join(c.used + c.used_not_declared),
@@ -243,7 +258,7 @@ def code_checks_df(res: ExtractionResult) -> pd.DataFrame:
             # önek/numarasıyla hiçbir tanım kategorisine yerleşmeyen tanımsız kodlar
             rows.append(
                 {
-                    "Birim": r.unit_id,
+                    "Birim": ul.get(r.unit_id, r.unit_id),
                     "Kategori": "(kategorisi belirlenemeyen)",
                     "Tanımlanan": "",
                     "Kullanılan": ", ".join(unplaced),
@@ -342,18 +357,23 @@ def build_pdf_excel(res: ExtractionResult) -> bytes:
     return buf.getvalue()
 
 
+def cmp_display(df: pd.DataFrame) -> pd.DataFrame:
+    """Karşılaştırma tablosunun "Durum" sütunu Türkçe okunur adlarla (iç kodlar yerine)."""
+    return df.assign(Durum=df["Durum"].map(lambda s: CMP_TR.get(s, s))) if "Durum" in df.columns else df
+
+
 def build_comparison_excel(res: ExtractionResult, comparison: pd.DataFrame, summary: pd.DataFrame) -> bytes:
     """Karşılaştırma raporu: özet + renkli sonuç tablosu (PRD renkleri) + PDF bulguları."""
     wb = Workbook()
     ws = wb.active
     ws.title = "Özet"
     _append(ws, ["Kaynak PDF", res.source.split("\\")[-1].split("/")[-1]])
-    _append(ws, ["PDF genel durum", res.status.value])
+    _append(ws, ["PDF genel durum", STATUS_TR.get(res.status.value, res.status.value)])
     _append(ws, ["Tema/ünite (beklenen / bulunan)", f"{res.expected_unit_count} / {len(res.units)}"])
     _append(ws, ["Öğrenme çıktısı (beklenen / çıkarılan)", f"{res.expected_lo_total} / {res.extracted_lo_total}"])
     _append(ws, [])
-    _write_df_into(ws, summary, "Durum")
-    _write_df(wb.create_sheet("Karşılaştırma"), comparison, "Durum")
+    _write_df_into(ws, cmp_display(summary), "Durum")
+    _write_df(wb.create_sheet("Karşılaştırma"), cmp_display(comparison), "Durum")
     _write_df(wb.create_sheet("PDF Bulguları"), findings_df(res), "Önem")
     buf = io.BytesIO()
     wb.save(buf)
