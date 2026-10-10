@@ -14,8 +14,10 @@ import fitz
 
 from models import ExpectedLoListColumn, ExpectedRow, ExpectedTable, LabelDef, ProgramSchema, SchemaOverrides, Span, TableRole, TextField
 from pdf_extract import (
+    LO_SHAPE_RE,
     UPPER_SEGMENT,
     PdfDoc,
+    code_segment_types,
     font_rank,
     group_rows,
     lo_code_regex,
@@ -135,16 +137,17 @@ def learn_lo_code(doc: PdfDoc, pages: list[int], body: frozenset[int]) -> tuple[
     """Yapı sayfasındaki örnek öğrenme çıktısı kodundan önek ve segment tipleri.
 
     En az üç segment (en az ikisi sayı) aranır; son segment büyük harfli bir kısaltma
-    olabilir (ör. "ARN.5.1.D." -> ["n", "n", "a"]).
+    olabilir (ör. "ARN.5.1.D." -> ["n", "n", "a"]), önekten sonra düzey Roma rakamı gelebilir
+    (ör. "EBRU.I.1.1." -> ["a", "n", "n"]). İki numaralı kodlar burada aranmaz: yapı sayfasında beceri
+    kodlarıyla (E1.1, SDB2.1) karışır; tema sayfalarında ÖÇ başlığının yanından öğrenilir.
     """
-    pat = re.compile(rf"^\s*([^\W\d_]+)[\s.]*(\d+(?:[\s.]+\d+)+(?:[\s.]+{UPPER_SEGMENT}(?=[.\s]|$))?)")
     for p in pages:
         for s in _content_spans(doc, p):
             if s.color not in body:
                 continue
-            m = pat.match(s.text)
+            m = LO_SHAPE_RE.match(s.text)
             if m:
-                types = ["n" if x.isdigit() else "a" for x in re.findall(r"\d+|[^\W\d_]+", m.group(2))]
+                types = code_segment_types(m.group(2))
                 if len(types) >= 3:
                     return m.group(1), types, s
     raise SchemaError("Yapı sayfasında örnek öğrenme çıktısı kodu bulunamadı")
@@ -244,13 +247,12 @@ def find_titles_from_example(doc: PdfDoc, body: frozenset[int], example: str) ->
 
 
 def lo_code_from_example(example: str) -> tuple[str, list[str]]:
-    """Örnek ÖÇ kodundan önek ve segment tipleri ("HMU.11.1.1." -> ("HMU", ["n", "n", "n"]))."""
-    pat = re.compile(rf"^\s*([^\W\d_]+)[\s.]*(\d+(?:[\s.]+\d+)+(?:[\s.]+{UPPER_SEGMENT}(?=[.\s]|$))?)")
-    m = pat.match(example or "")
+    """Örnek ÖÇ kodundan önek ve segment tipleri ("HMU.11.1.1." -> ("HMU", ["n", "n", "n"]);
+    "MOY.1.1." -> ("MOY", ["n", "n"]); "EBRU.I.1.1." -> ("EBRU", ["a", "n", "n"]))."""
+    m = LO_SHAPE_RE.match(example or "")
     if not m:
         raise SchemaError(f'Örnek öğrenme çıktısı kodu "ÖNEK.9.1.1." biçiminde olmalı: {example!r}')
-    types = ["n" if x.isdigit() else "a" for x in re.findall(r"\d+|[^\W\d_]+", m.group(2))]
-    return m.group(1), types
+    return m.group(1), code_segment_types(m.group(2))
 
 
 def find_unit_titles(doc: PdfDoc, body: frozenset[int]) -> tuple[str, list[Span]]:
@@ -454,25 +456,59 @@ GENERIC_CODE_START_RE = re.compile(r"^\s*[^\W\d_]{1,6}[\s.]*\d")
 
 def learn_lo_code_from_units(doc: PdfDoc, body: frozenset[int], data_start: int) -> tuple[str, list[str], Span]:
     """Yapı sayfasında örnek kod yoksa ÖÇ kodu deseni tema sayfalarından öğrenilir: gövde renginde,
-    satır başında en sık geçen en az üç segmentli kod biçimi (ör. "MAT.1.1.1.")."""
-    pat = re.compile(rf"^\s*([^\W\d_]+)[\s.]*(\d+(?:[\s.]+\d+)+(?:[\s.]+{UPPER_SEGMENT}(?=[.\s]|$))?)")
+    satır başında en sık geçen en az üç segmentli kod biçimi (ör. "MAT.1.1.1.", "EBRU.I.1.1.").
+
+    Üç segmentli kod yoksa iki numaralı ÖÇ kodu (ör. "MOY.1.1.") aranır. Bu biçim beceri kodlarıyla (E1.1,
+    SDB2.1) aynı olduğu için sıklığa bakılmaz; yerleşimden öğrenilir: "ÖĞRENME ÇIKTILARI" başlığının sağında ya
+    da hemen altında satır başında duran ilk kod (bkz. _codes_beside_lo_labels)."""
     shapes: Counter[tuple[str, tuple[str, ...]]] = Counter()
     example: dict[tuple[str, tuple[str, ...]], Span] = {}
     for s in doc.spans:
         if s.page < data_start or s.id in doc.furniture or s.color not in body:
             continue
-        m = pat.match(s.text)
+        m = LO_SHAPE_RE.match(s.text)
         if not m:
             continue
-        types = tuple("n" if x.isdigit() else "a" for x in re.findall(r"\d+|[^\W\d_]+", m.group(2)))
+        types = tuple(code_segment_types(m.group(2)))
         if len(types) >= 3:
             key = (m.group(1), types)
             shapes[key] += 1
             example.setdefault(key, s)
     if not shapes:
+        shapes, example = _codes_beside_lo_labels(doc, body, data_start)
+    if not shapes:
         raise SchemaError("Öğrenme çıktısı kodu deseni (ör. \"MAT.1.1.1.\") bulunamadı")
     key = shapes.most_common(1)[0][0]
     return key[0], list(key[1]), example[key]
+
+
+def _codes_beside_lo_labels(doc: PdfDoc, body: frozenset[int], data_start: int):
+    """Her "ÖĞRENME ÇIKTILARI…" başlığı (gövde renginde olmayan ya da kalın) için aynı sayfada başlığın sağında ya da hemen
+    altında, satır başında duran EN YAKIN kod; biçimi (önek, segment tipleri) oylanır. Kod yalnızca konumuyla
+    seçilir, önek program bazında bilinmez."""
+    shapes: Counter[tuple[str, tuple[str, ...]]] = Counter()
+    example: dict[tuple[str, tuple[str, ...]], Span] = {}
+    for p in range(data_start, doc.page_count + 1):
+        spans = _content_spans(doc, p)
+        for lab in spans:
+            if (lab.color in body and font_rank(lab.font) < 2) or "ciktilari" not in norm_label(lab.text).replace("ç", "c"):
+                continue
+            best = None
+            for s in spans:
+                if s.color not in body or s.y0 < lab.y0 - 4 or s.y0 > lab.y1 + 40 or s.x1 <= lab.x0:
+                    continue
+                m = LO_SHAPE_RE.match(s.text)
+                if not m:
+                    continue
+                d = (s.y0 - lab.y0) + max(0.0, s.x0 - lab.x1) * 0.1
+                if best is None or d < best[0]:
+                    best = (d, s, m)
+            if best is not None:
+                _, s, m = best
+                key = (m.group(1), tuple(code_segment_types(m.group(2))))
+                shapes[key] += 1
+                example.setdefault(key, s)
+    return shapes, example
 
 
 def detect_schema(doc: PdfDoc, overrides: SchemaOverrides | None = None) -> ProgramSchema:

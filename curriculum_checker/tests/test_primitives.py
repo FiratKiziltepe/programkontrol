@@ -87,3 +87,32 @@ def test_letter_segment_lo_codes():
     c = parse_code("ARN.5.3. SÖS")
     assert c.raw == "ARN.5.3. SÖS" and c.normalized == "ARN.5.3.SÖS" and c.segments == ["5", "3", "SÖS"]
     assert parse_code("ARN.5.3.SÖS").key == c.key
+
+
+@pytest.mark.parametrize(
+    "raw, prefix, segments, types",
+    [
+        ("EBRU.I.1.1.", "EBRU", ["I", "1", "1"], ["a", "n", "n"]),  # Roma rakamı: düzey
+        ("SBÇ.II.4.1", "SBÇ", ["II", "4", "1"], ["a", "n", "n"]),
+        ("MAT.T.11.1.1.", "MAT", ["T", "11", "1", "1"], ["a", "n", "n", "n"]),  # kısaltma ara parçası
+        ("MOY.1.1.", "MOY", ["1", "1"], ["n", "n"]),  # iki numaralı: ünite . ÖÇ
+        ("MAT1.1.", "MAT", ["1", "1"], ["n", "n"]),
+        ("ARN.5.1.SÖS", "ARN", ["5", "1", "SÖS"], ["n", "n", "a"]),
+        ("MÜZ. 5.1.6.", "MÜZ", ["5", "1", "6"], ["n", "n", "n"]),
+    ],
+)
+def test_lo_code_shapes(raw, prefix, segments, types):
+    from pdf_extract import LO_SHAPE_RE, code_segment_types
+
+    c = parse_code(raw)
+    assert (c.prefix, c.segments, c.raw) == (prefix, segments, raw)
+    m = LO_SHAPE_RE.match(raw)
+    assert m and m.group(1) == prefix and code_segment_types(m.group(2)) == types
+    assert lo_code_regex(prefix, types).match(raw + " Metin")
+
+
+def test_lo_code_from_example_accepts_new_shapes():
+    from schema_detect import lo_code_from_example
+
+    assert lo_code_from_example("EBRU.I.1.1.") == ("EBRU", ["a", "n", "n"])
+    assert lo_code_from_example("MOY.1.1.") == ("MOY", ["n", "n"])

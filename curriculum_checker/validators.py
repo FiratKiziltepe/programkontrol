@@ -267,7 +267,8 @@ def learn_code_scheme(units: list[Unit], schema: ProgramSchema) -> dict:
     theme_ok = sum(
         1 for u in scored if u.order is not None and all(len(lo.code.segments) >= 2 and lo.code.segments[-2] == str(u.order) for lo in u.learning_outcomes)
     )
-    theme_segment = len(types) >= 3 and types[-2] == "n" and theme_ok * 2 >= len(scored)
+    # İki numaralı kodlarda (MOY.2.3) da ilk numara ünite/tema sırasıdır (kullanıcı kararı); çoğunlukla doğrulanır
+    theme_segment = len(types) >= 2 and types[-2] == "n" and theme_ok * 2 >= len(scored)
     per_unit = {(u.id, i): i for u in scored for i in range(1, len(u.learning_outcomes) + 1)}
     per_group: dict[tuple[str, int], int] = {}
     counter: Counter = Counter()

@@ -301,13 +301,29 @@ def dehyphen_view(text: str) -> tuple[str, list[int]]:
     return "".join(view), idx
 
 
+UPPER_SEGMENT = r"[A-ZÇĞİÖŞÜ]{1,4}"
+# Önekten sonra düzeyi/türü gösteren ara parça: Roma rakamı (EBRU.I.1.1., SBÇ.II.4.1) ya da büyük harfli kısaltma
+# (MAT.T.11.1.1.); yalnızca ardından nokta ve numara gelirse. Önceden ayrıştırılamayan kodları etkiler.
+ROMAN_SEGMENT = UPPER_SEGMENT
+# ÖÇ kodu biçimi: önek, isteğe bağlı Roma rakamı, en az iki numara, isteğe bağlı sonda büyük harfli kısaltma
+LO_SHAPE_RE = re.compile(
+    rf"^\s*([^\W\d_]+)[\s.]*((?:{ROMAN_SEGMENT}[ \t]*\.[ \t]*)?\d+(?:[\s.]+\d+)+(?:[\s.]+{UPPER_SEGMENT}(?=[.\s]|$))?)"
+)
+
+
+def code_segment_types(body: str) -> list[str]:
+    """LO_SHAPE_RE gövdesinin segment tipleri: "n" sayı, "a" harf (Roma rakamı ya da kısaltma)."""
+    return ["n" if x.isdigit() else "a" for x in re.findall(r"\d+|[^\W\d_]+", body)]
+
+
 def parse_code(raw: str) -> Code:
     """Raw kodu yapısal kimliğe ayırır. Raw asla değiştirilmez.
 
     'MÜZ. 5.1.6.' -> MÜZ.5.1.6 ; 'MÜZ 5.1.3.' -> MÜZ.5.1.3 ; 'D11.2' -> D11.2 ;
-    'BT-\\nYAB3.3.' (satır sonunda bölünmüş) -> BTYAB3.3
+    'BT-\\nYAB3.3.' (satır sonunda bölünmüş) -> BTYAB3.3 ;
+    'EBRU.I.1.1.' (önekten sonra Roma rakamıyla düzey) -> EBRU.I.1.1
     """
-    m = re.match(rf"\s*({_LETTERS}+)([\s.]*)(\d.*)$", _LINE_HYPHEN_RE.sub("", raw), re.S)
+    m = re.match(rf"\s*({_LETTERS}+)([\s.]*)((?:{ROMAN_SEGMENT}[ \t]*\.[ \t]*)?\d.*)$", _LINE_HYPHEN_RE.sub("", raw), re.S)
     if not m:
         raise ValueError(f"kod ayrıştırılamadı: {raw!r}")
     prefix, sep, rest = m.group(1), m.group(2), m.group(3)
@@ -315,9 +331,6 @@ def parse_code(raw: str) -> Code:
     nums = [int(x) for x in segments if x.isdigit()]
     normalized = prefix + ("." if sep else "") + ".".join(segments)
     return Code(raw=raw, normalized=normalized, prefix=prefix, numbers=nums, segments=segments)
-
-
-UPPER_SEGMENT = r"[A-ZÇĞİÖŞÜ]{1,4}"
 
 
 def lo_code_regex(prefix: str, segment_types: list[str]) -> re.Pattern:
