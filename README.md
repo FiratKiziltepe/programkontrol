@@ -70,7 +70,7 @@ python -m streamlit run curriculum_checker/app.py
 | Sekme | Ne yapar |
 |---|---|
 | **1. PDF Analizi** | PDF yüklenir ve analiz edilir. Temalar/üniteler, bölümler, ÖÇ'ler tablo olarak gösterilir. PDF'den üretilen Excel indirilir (1. sayfa sistem Excel'iyle aynı 13 sütun). Yapı otomatik tanınamazsa **elle yapı formu** açılır; başarılı analizde de "Program yapısı … yanlışsa elle düzeltin" bölümü vardır. |
-| **2. PDF Kontrolleri** | Sayı kontrolleri, bütün bulgular (önem/kontrol/birim filtresi), kod kontrolleri (tanımlanan ↔ kullanılan, kategori bazında "Kullanılmış ama tanımlı değil"), tema dışı bırakılan bölgeler. |
+| **2. PDF Kontrolleri** | Sayı kontrolleri, bütün bulgular (önem/kontrol/birim filtresi), **işaretli PDF indirme**, kod kontrolleri (tanımlanan ↔ kullanılan, kategori bazında "Kullanılmış ama tanımlı değil"), tema dışı bırakılan bölgeler. |
 | **3. Gemini Doğrulama** | İsteğe bağlı. Seçilen temaların sayfa görüntüleri **tarayıcıdan** Gemini'ye gider; Gemini'nin gördüğü başlık/kod yerleşimi çıkarımla karşılaştırılır. |
 | **4. Excel Karşılaştırma** | Sistem Excel'i (bir ya da **birden çok** dosya) yüklenir; **karşılaştırma kapsamı** seçilir; öğe bazında iki yönlü karşılaştırma (Aynı, Biçim farkı, PDF'de var/Excel'de yok, …). |
 | **5. Rapor** | Özet ve karşılaştırma raporu (Excel). |
@@ -82,6 +82,18 @@ Metin hücrelerinde çıkarımın kaynak span'leri; kodlarda PDF metin katmanın
 (D1 ≠ D10 ≠ D1.1) işaretlenir. Kod kontrol tablosunda "Tanımlanan / Tanımlı ama kullanılmamış" tanımı,
 "Kullanılan / Kullanılmış ama tanımlı değil" uygulamalardaki kullanımları gösterir. Bulunamayan yer tahmin
 edilmez: sayfa işaretsiz gösterilir, not düşülür. (`pdf_locate.py`, `pdf_view.py`)
+
+**İşaretli PDF (2. sekme):** Bulgular tablosunda o an süzülmüş bulgular PDF'nin bir kopyasında işaretlenir
+(`pdf_annotate.py`). Yer **sarı** vurgulanır (PDF açıklaması; not içeriği yorumlar panelinde de görünür), açıklama
+kutusu sayfanın **sağına eklenen şeritte** durur ve yere kesik çizgiyle bağlanır; kutu kalabalıksa şerit sütunlara
+genişler. `USED_NOT_DECLARED` için temanın ilgili tanım bölümü **mavi** işaretlenir ve orada tanımlı aynı önekli
+kodlar yazılır (öneki hiç tanımlanmamışsa tema başlığına not); kullanım ve tanım kutuları birbirine tıklanabilir
+bağlantılıdır. PDF içeriği ve sayfa numaraları değişmez, sayfa eklenmez; bulgular yer imlerinde tema > bulgu olarak
+listelenir. Dosya **artımlı** kaydedilir (orijinal baytlar korunur, boyut yaklaşık aynı kalır).
+
+**Ders saati uyuşmazlığını göz ardı et (kenar çubuğu):** İşaretlenince `HOURS_MISMATCH` bulguları tablolardan,
+sayaçlardan, Excel'den ve işaretli PDF'den çıkarılır; tema ve genel durum bunlarsız hesaplanır, göz ardı edilen sayı
+not olarak gösterilir (`validators.ignore_checks`). ÖÇ sayısı kontrolleri göz ardı edilemez.
 
 ---
 
@@ -344,6 +356,7 @@ Gemini'nin yanıtları döner. Varsayılan model `gemini-3.5-flash-lite` (arayü
 | `grid_tab.py` | 6. sekme |
 | `pdf_locate.py` | Hücrenin PDF'deki yeri (sayfa + işaret kutuları), deterministik |
 | `pdf_view.py` | "PDF'de göster" diyaloğu, sarı işaretli sayfa görüntüsü, tıklanabilir tablo yardımcısı |
+| `pdf_annotate.py` | İşaretli PDF: vurgular, sağ şeritte açıklama kutuları, tanımsız kod için tanım bölümü kanıtı, yer imleri |
 | `review_report.py` | İnceleme raporu (Markdown/Word), nihai tablo Excel'i, Gemini rapor istemi |
 | `gemini_verify.py`, `gemini_component.py` | 3. sekme: sayfa görüntüleri, yanıt doğrulama, tarayıcı bileşeni |
 | `gemini_tasks_component.py` | Genel tarayıcı Gemini görev bileşeni (6. sekme) |

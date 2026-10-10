@@ -21,6 +21,7 @@ from models import (
     Finding,
     ProgramSchema,
     SchemaOverrides,
+    Section,
     SectionKind,
     Severity,
     Status,
@@ -462,10 +463,14 @@ def check_codes(
     return checks, sorted(set(not_declared)), out
 
 
-def check_hours(u: Unit, expected: ExpectedRow | None) -> tuple[int | None, list[Finding]]:
+def hours_sections(u: Unit) -> list[Section]:
     from schema_detect import HOURS_COLUMN_HINTS, _hint
 
-    secs = [s for s in u.sections if s.label is not None and _hint(s.label.text, HOURS_COLUMN_HINTS)]
+    return [s for s in u.sections if s.label is not None and _hint(s.label.text, HOURS_COLUMN_HINTS)]
+
+
+def check_hours(u: Unit, expected: ExpectedRow | None) -> tuple[int | None, list[Finding]]:
+    secs = hours_sections(u)
     if len(secs) != 1 or secs[0].content is None:
         return None, [_f(Severity.INFO, "HOURS_NOT_FOUND", "Birimde ders saati bölümü tekil olarak bulunamadı", u)]
     txt = secs[0].content.text.strip()
@@ -622,6 +627,22 @@ def _worst(findings: list[Finding]) -> Status:
         return Status.PASS
     w = max(findings, key=lambda f: SEVERITY_ORDER[f.severity]).severity
     return {Severity.INFO: Status.PASS, Severity.WARNING: Status.WARNING, Severity.NEEDS_REVIEW: Status.NEEDS_REVIEW, Severity.FAIL: Status.FAIL}[w]
+
+
+# Kullanıcının göz ardı edebileceği kontroller (arayüzde seçenek). Öğrenme çıktısı sayısı kontrolleri burada
+# OLAMAZ: beklenen ve çıkarılan ÖÇ sayısı uyuşmuyorsa PASS verilmez.
+IGNORABLE_CHECKS = {"HOURS_MISMATCH": "Ders saati uyuşmazlığı"}
+
+
+def ignore_checks(res: ExtractionResult, checks) -> ExtractionResult:
+    """Seçilen kontrollerin bulguları çıkarılmış kopya; birim ve genel durum kalan bulgularla yeniden hesaplanır.
+    Yalnızca IGNORABLE_CHECKS içindekiler göz ardı edilebilir. Çıkarım (birimler, metinler) değişmez."""
+    checks = set(checks) & set(IGNORABLE_CHECKS)
+    if not checks:
+        return res
+    findings = [f for f in res.findings if f.check not in checks]
+    reports = [r.model_copy(update={"status": _worst([f for f in findings if f.unit_id == r.unit_id])}) for r in res.unit_reports]
+    return res.model_copy(update={"findings": findings, "unit_reports": reports, "status": _worst(findings)})
 
 
 def analyze_pdf(path: str, overrides: SchemaOverrides | None = None) -> ExtractionResult:

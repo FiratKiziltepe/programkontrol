@@ -39,6 +39,7 @@ from excel_export import (
     units_df,
 )
 import manual_schema
+import pdf_annotate
 import pdf_locate
 import pdf_view
 import scope_panel
@@ -47,7 +48,7 @@ import gemini_verify
 from gemini_component import gemini_browser
 import grid_tab
 from schema_detect import SchemaError
-from validators import analyze_pdf
+from validators import analyze_pdf, ignore_checks
 
 st.set_page_config(page_title="Öğretim Programı Kontrol", page_icon="📘", layout="wide")
 
@@ -129,7 +130,8 @@ def _run_analysis(path: str, name: str, digest: str, ov: SchemaOverrides | None 
         status.update(label="Analiz tamamlandı", state="complete", expanded=False)
     st.session_state.pop("schema_fail", None)
     st.session_state.update(
-        res=result, pdf_name=name, pdf_digest=digest, pdf_path=path, overrides=ov, cmp=None, xl_name=None, gemini=None, gv_payload=None
+        res=result, pdf_name=name, pdf_digest=digest, pdf_path=path, overrides=ov, cmp=None, xl_name=None, gemini=None, gv_payload=None,
+        annot_pdf=None,
     )
     st.rerun()
 
@@ -139,10 +141,33 @@ def _pdf_excel_cached(digest: str, _res) -> bytes:
     return build_pdf_excel(_res)
 
 
+def ignored_checks() -> set[str]:
+    return {"HOURS_MISMATCH"} if st.session_state.get("ignore_hours") else set()
+
+
+def current_res():
+    """Analiz sonucu; kenar çubuğunda göz ardı edilen kontrollerin bulguları çıkarılmış, durumlar yeniden hesaplanmış."""
+    res = st.session_state.get("res")
+    return ignore_checks(res, ignored_checks()) if res is not None else None
+
+
+def ignored_note() -> None:
+    res = st.session_state.get("res")
+    n = sum(f.check in ignored_checks() for f in res.findings) if res is not None else 0
+    if n:
+        st.caption(f"{n} ders saati uyuşmazlığı bulgusu göz ardı edildi (kenar çubuğundaki seçenek); durumlar bunlarsız hesaplandı.")
+
+
 # ---------------------------------------------------------------- kenar çubuğu
 
 with st.sidebar:
     st.header("Öğretim Programı Kontrol")
+    st.checkbox(
+        "Ders saati uyuşmazlığını göz ardı et",
+        key="ignore_hours",
+        help="İşaretlenince HOURS_MISMATCH bulguları tablolardan, sayaçlardan, Excel'den ve işaretli PDF'den çıkarılır; "
+        "tema ve genel durum bunlarsız hesaplanır. Öğrenme çıktısı sayısı kontrolleri göz ardı edilemez.",
+    )
     st.caption(
         "1) PDF'yi yükleyin ve analiz edin. İçerik ve sorunlar tablolar halinde gösterilir; "
         "PDF'den üretilen Excel indirilebilir.\n\n"
@@ -153,7 +178,7 @@ with st.sidebar:
             f"PyMuPDF {fitz.VersionBind} kullanılıyor; araç {TESTED_PYMUPDF} ile doğrulandı. Yeni sürümler bazı "
             "fontlarda noktalı İ harfini I okuyabilir. Streamlit Cloud'da Python 3.12 seçin (requirements.txt)."
         )
-    res = st.session_state.get("res")
+    res = current_res()
     if res is not None:
         st.success(f"Analiz edilen PDF: **{st.session_state['pdf_name']}**")
         st.metric("PDF genel durum", STATUS_TR.get(res.status.value, res.status.value))
@@ -196,7 +221,7 @@ with tab_pdf:
             _run_analysis(fail["path"], fail["name"], fail["digest"], ov)
             st.rerun()  # buraya yalnızca başarısız analizde gelinir: yeni hata mesajı gösterilir
 
-    res = st.session_state.get("res")
+    res = current_res()
     if res is None:
         st.info("Başlamak için bir PDF yükleyip **PDF'yi Analiz Et** düğmesine basın.")
     else:
@@ -209,6 +234,7 @@ with tab_pdf:
         c3.metric("Öğrenme çıktısı", f"{res.extracted_lo_total}/{_expected(res.expected_lo_total)}", help="Çıkarılan / süre tablosunda beklenen (? = tablo yok veya birimlerle eşleşmedi)")
         c4.metric("Hata", int(sev.get("FAIL", 0)))
         c5.metric("İnceleme gerekli", int(sev.get("NEEDS_REVIEW", 0)))
+        ignored_note()
 
         if not res.schema_.structure_pages:
             st.warning("Program yapısı/tanıtım sayfası bulunamadı; bölüm başlıkları ve kod deseni tema sayfalarından öğrenildi. Sonuçları inceleyin.")
@@ -262,7 +288,7 @@ with tab_pdf:
 
         st.download_button(
             "PDF'den üretilen Excel'i indir",
-            data=_pdf_excel_cached(st.session_state["pdf_digest"], res),
+            data=_pdf_excel_cached(st.session_state["pdf_digest"] + "|" + ",".join(sorted(ignored_checks())), res),
             file_name=f"{os.path.splitext(st.session_state['pdf_name'])[0]}_pdf_cikarim.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             help="1. sayfa sistem Excel'iyle aynı düzendedir; diğer sayfalarda tüm bölümler, öğrenme çıktıları ve bulgular vardır.",
@@ -271,11 +297,12 @@ with tab_pdf:
 # ---------------------------------------------------------------- 2. PDF Kontrolleri
 
 with tab_checks:
-    res = st.session_state.get("res")
+    res = current_res()
     if res is None:
         st.info("Önce **1. PDF Analizi** sekmesinde bir PDF analiz edin.")
     else:
         fdf = findings_df(res)
+        ignored_note()
         st.subheader("Sayı kontrolleri")
         st.caption(pdf_view.HINT)
         units_table(res, "loc_units_2")
@@ -301,6 +328,30 @@ with tab_checks:
                 style_by(view, "Önem"), "loc_findings", lambda r, c: L.finding_loc(res.findings[view.index[r]]), res,
                 hide_index=True, width="stretch", height=420,
             )
+
+            st.markdown("**İşaretli PDF**")
+            st.caption(
+                "Tabloda gösterilen bulgular (yukarıdaki süzgece göre) PDF'nin bir kopyasında işaretlenir: yer **sarı** "
+                "vurgulanır, açıklama kutusu sayfanın sağına eklenen şeritte durur. Tanımlanmamış kodlarda temanın ilgili "
+                "tanım bölümü **mavi** işaretlenir ve tanımlı kodlar yazılır; kutular birbirine bağlantılıdır. PDF'nin "
+                "içeriği ve sayfa numaraları değişmez; bulgular yer imlerinde listelenir."
+            )
+            sig = (st.session_state["pdf_digest"], tuple(sorted(ignored_checks())), tuple(view.index))
+            if st.button(f"İşaretli PDF'yi hazırla ({len(view)} bulgu)", disabled=view.empty):
+                with st.spinner("PDF işaretleniyor…"):
+                    data = pdf_annotate.build_annotated_pdf(res, [res.findings[i] for i in view.index], L)
+                st.session_state["annot_pdf"] = (sig, data)
+            ap = st.session_state.get("annot_pdf")
+            if ap is not None and ap[0] == sig:
+                st.download_button(
+                    "İşaretli PDF'yi indir",
+                    data=ap[1],
+                    file_name=f"{os.path.splitext(st.session_state['pdf_name'])[0]}_isaretli.pdf",
+                    mime="application/pdf",
+                    type="primary",
+                )
+            elif ap is not None:
+                st.caption("Süzgeç değişti; işaretli PDF'yi yeniden hazırlayın.")
 
         st.subheader("Kod kontrolleri (tanımlanan ↔ uygulamalarda kullanılan)")
         st.caption("Alan becerileri kod kontrolü dışındadır.")
@@ -362,7 +413,7 @@ def _gemini_df(report) -> pd.DataFrame:
 
 
 with tab_gemini:
-    res = st.session_state.get("res")
+    res = current_res()
     if res is None:
         st.info("Önce **1. PDF Analizi** sekmesinde bir PDF analiz edin.")
     else:
@@ -438,7 +489,7 @@ with tab_gemini:
 # ---------------------------------------------------------------- 4. Excel Karşılaştırma
 
 with tab_cmp:
-    res = st.session_state.get("res")
+    res = current_res()
     if res is None:
         st.info("Önce **1. PDF Analizi** sekmesinde bir PDF analiz edin.")
     else:
@@ -491,7 +542,7 @@ with tab_cmp:
 # ---------------------------------------------------------------- 5. Rapor
 
 with tab_report:
-    res = st.session_state.get("res")
+    res = current_res()
     if res is None:
         st.info("Önce **1. PDF Analizi** sekmesinde bir PDF analiz edin.")
     else:
@@ -531,7 +582,7 @@ with tab_report:
 # ---------------------------------------------------------------- 6. Tablo Karşılaştırma
 
 with tab_grid:
-    res = st.session_state.get("res")
+    res = current_res()
     if res is None:
         st.info("Önce **1. PDF Analizi** sekmesinde bir PDF analiz edin.")
     else:

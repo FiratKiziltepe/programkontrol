@@ -240,6 +240,15 @@ class Locator:
                     loc.title = title
                     return loc
             return self.code_loc(title, [code], pages=u.pages)
+        if f.check == "HOURS_MISMATCH" and u is not None:
+            from validators import hours_sections
+
+            secs = hours_sections(u)
+            if len(secs) == 1:
+                loc = self.section_loc(u, secs[0])
+                if loc.found:
+                    loc.title = title
+                    return loc
         if u is not None:
             loc = self.unit_loc(u)
             loc.title, loc.note = title, "Bulgunun ayrıntılı konumu yok; tema başlığı işaretlendi."
