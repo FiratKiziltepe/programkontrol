@@ -158,6 +158,7 @@ class ProgramSchema(BaseModel):
     lo_segment_types: list[str] = Field(default_factory=list)  # "n": sayı, "a": harf (ör. ARN.5.1.D)
     lo_example: Optional[TextField]
     data_start_page: int
+    unit_title_kw_first: bool = False  # başlıklar "KELİME N: Ad" biçiminde (ör. İngilizce "THEME 1: SCHOOL LIFE")
 
 
 class SchemaOverrides(BaseModel):

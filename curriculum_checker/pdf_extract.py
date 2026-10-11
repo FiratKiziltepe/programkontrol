@@ -318,15 +318,19 @@ UPPER_SEGMENT = r"[A-ZÇĞİÖŞÜ]{1,4}"
 # Önekten sonra düzeyi/türü gösteren ara parça: Roma rakamı (EBRU.I.1.1., SBÇ.II.4.1) ya da büyük harfli kısaltma
 # (MAT.T.11.1.1.); yalnızca ardından nokta ve numara gelirse. Önceden ayrıştırılamayan kodları etkiler.
 ROMAN_SEGMENT = UPPER_SEGMENT
-# ÖÇ kodu biçimi: önek, isteğe bağlı Roma rakamı, en az iki numara, isteğe bağlı sonda büyük harfli kısaltma
+# Sondaki beceri parçası: büyük harfli kısaltma, ardından numara olabilir (ARN.5.1.SÖS, ENG.9.1.L1, ENG.2.1.L2)
+SKILL_SEGMENT = rf"{UPPER_SEGMENT}\d*"
+# ÖÇ kodu biçimi: önek, isteğe bağlı ara parça, ardından en az iki numara (sonda isteğe bağlı beceri parçası) ya da
+# bir numara + beceri parçası (ENG.PREP.1.S3). Tek numaralı tanımlar ("D7. Estetik") eşleşmez.
+_SKILL_END = rf"[\s.]+{SKILL_SEGMENT}(?=[.\s]|$)"
 LO_SHAPE_RE = re.compile(
-    rf"^\s*([^\W\d_]+)[\s.]*((?:{ROMAN_SEGMENT}[ \t]*\.[ \t]*)?\d+(?:[\s.]+\d+)+(?:[\s.]+{UPPER_SEGMENT}(?=[.\s]|$))?)"
+    rf"^\s*([^\W\d_]+)[\s.]*((?:{ROMAN_SEGMENT}[ \t]*\.[ \t]*)?\d+(?:(?:[\s.]+\d+)+(?:{_SKILL_END})?|{_SKILL_END}))"
 )
 
 
 def code_segment_types(body: str) -> list[str]:
-    """LO_SHAPE_RE gövdesinin segment tipleri: "n" sayı, "a" harf (Roma rakamı ya da kısaltma)."""
-    return ["n" if x.isdigit() else "a" for x in re.findall(r"\d+|[^\W\d_]+", body)]
+    """LO_SHAPE_RE gövdesinin segment tipleri: "n" sayı, "a" harf (Roma rakamı, kısaltma ya da "L1" gibi beceri)."""
+    return ["n" if x.isdigit() else "a" for x in re.findall(r"[^\W\d_]+\d*|\d+", body)]
 
 
 def parse_code(raw: str) -> Code:
@@ -334,13 +338,15 @@ def parse_code(raw: str) -> Code:
 
     'MÜZ. 5.1.6.' -> MÜZ.5.1.6 ; 'MÜZ 5.1.3.' -> MÜZ.5.1.3 ; 'D11.2' -> D11.2 ;
     'BT-\\nYAB3.3.' (satır sonunda bölünmüş) -> BTYAB3.3 ;
-    'EBRU.I.1.1.' (önekten sonra Roma rakamıyla düzey) -> EBRU.I.1.1
+    'EBRU.I.1.1.' (önekten sonra Roma rakamıyla düzey) -> EBRU.I.1.1 ;
+    'ENG.9.1.L1.' (sonda beceri + numara) -> ENG.9.1.L1
     """
     m = re.match(rf"\s*({_LETTERS}+)([\s.]*)((?:{ROMAN_SEGMENT}[ \t]*\.[ \t]*)?\d.*)$", _LINE_HYPHEN_RE.sub("", raw), re.S)
     if not m:
         raise ValueError(f"kod ayrıştırılamadı: {raw!r}")
     prefix, sep, rest = m.group(1), m.group(2), m.group(3)
-    segments = [str(int(x)) if x.isdigit() else x for x in re.findall(rf"\d+|{_LETTERS}+", rest)]
+    # Harften sonra gelen numara aynı parçadadır ("ENG.9.1.L1" -> [9, 1, L1])
+    segments = [str(int(x)) if x.isdigit() else x for x in re.findall(rf"{_LETTERS}+\d*|\d+", rest)]
     nums = [int(x) for x in segments if x.isdigit()]
     normalized = prefix + ("." if sep else "") + ".".join(segments)
     return Code(raw=raw, normalized=normalized, prefix=prefix, numbers=nums, segments=segments)
@@ -353,7 +359,7 @@ def lo_code_regex(prefix: str, segment_types: list[str]) -> re.Pattern:
     Boşluk/nokta varyasyonlarına toleranslıdır (MÜZ.5.1.3. / MÜZ. 5.1.3. / MÜZ 5.1.3.).
     """
     sep = r"(?:[ \t]*\.[ \t]*|[ \t]+)"
-    nums = sep.join(r"\d+" if t == "n" else UPPER_SEGMENT for t in segment_types)
+    nums = sep.join(r"\d+" if t == "n" else SKILL_SEGMENT for t in segment_types)
     # Kod "." ile bitiyorsa ardından boşluksuz metin gelebilir (ör. "BTY.6.4.2.Telif").
     return re.compile(rf"^[ \t]*({re.escape(prefix)}[ \t]*\.?[ \t]*{nums}(?:\.|(?=\s|$|[;,)])))")
 
@@ -365,7 +371,7 @@ def loose_lo_code_regex(prefix: str, n_segments: int, min_segments: int = 1) -> 
     """
     # Segmenti eksik başlıklar da yakalanır (ör. Lazca s.106 "LAZ.6.2.", Adigece s.66 "ADG.5.4.");
     # yalnızca koddan oluşan satırda kullanıldığı için sıradan metinle karışmaz.
-    seg = rf"(?:\d+|{UPPER_SEGMENT})"
+    seg = rf"(?:\d+|{SKILL_SEGMENT})"
     sep = r"(?:[ \t]*\.[ \t]*|[ \t]+)"
     body = seg + rf"(?:{sep}{seg}){{{min_segments - 1},{n_segments - 1}}}"
     return re.compile(rf"^[ \t]*({re.escape(prefix)}[ \t]*\.?[ \t]*{body}(?:\.|(?=\s|$|[;,)])))")

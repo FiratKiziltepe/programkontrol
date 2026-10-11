@@ -60,6 +60,7 @@ RECOGNITION_ISSUES = {
     "MISSING_SECTION": "Bölüm başlığı bulunamadı",
     "APPLICATIONS_LABEL_MISSING": "Bölüm başlığı bulunamadı",
     "UNKNOWN_LABEL": "Başlık yapısı farklı",
+    "LABEL_NOT_IN_STRUCTURE": "Başlık yapısı farklı",
     "ORPHAN_LABEL": "Başlık yapısı farklı",
     "GROUP_STYLE_VARIANT": "Başlık yapısı farklı",
     "GROUP_HAS_CONTENT": "Başlık yapısı farklı",

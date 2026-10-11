@@ -220,7 +220,7 @@ def build_annotated_pdf(res: ExtractionResult, findings: list[Finding], L: Locat
         notes.append(n)
         finding_notes[num] = n
         for p in marked[1:]:
-            notes.append(_Note(p, _first_anchor(loc, p), f"#{num} (devam) · {check_tr(f.check)}", [f"İlk işaret: s.{page}"], n.colors))
+            notes.append(_Note(p, _first_anchor(loc, p), f"#{num} (devam) · {check_tr(f.check)}", [f.message] + detail_lines(f) + [f"İlk işaret: s.{page}"], n.colors))
         toc_items.append((f.unit_id or "", num, page, n.anchor, f"#{num} {SEVERITY_TR.get(sev, sev)} · {check_tr(f.check)}" + (f" · {f.details['code_raw']}" if f.details.get("code_raw") else "")))
 
         if f.check == "USED_NOT_DECLARED" and u is not None and f.details.get("code_raw"):

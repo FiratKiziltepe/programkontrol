@@ -274,14 +274,19 @@ def find_unit_titles(doc: PdfDoc, body: frozenset[int]) -> tuple[str, list[Span]
                 if i == 0 or r[i - 1].color != s.color:
                     if UNIT_TITLE_RE.match(joined):
                         cands.append(s.model_copy(update={"text": joined}))
+    rx, grp = UNIT_TITLE_RE, 2
+    if not cands:
+        # Yedek: hiç "N. KELİME: Ad" yoksa "KELİME N: Ad" biçimi (ör. İngilizce "THEME 1: SCHOOL LIFE")
+        rx, grp = KW_FIRST_RE, 1
+        cands = [s for s in _title_runs(doc, body) if KW_FIRST_RE.match(s.text)]
     pages_by_kw: dict[str, set[int]] = defaultdict(set)
     for s in cands:
-        pages_by_kw[norm_label(UNIT_TITLE_RE.match(s.text).group(2))].add(s.page)
+        pages_by_kw[norm_label(rx.match(s.text).group(grp))].add(s.page)
     if not pages_by_kw:
         raise SchemaError("PDF'de tema/ünite/öğrenme alanı başlığı (\"1. TEMA: …\" biçiminde) bulunamadı")
     kw_norm = max(pages_by_kw, key=lambda k: len(pages_by_kw[k]))
-    titles = [s for s in cands if norm_label(UNIT_TITLE_RE.match(s.text).group(2)) == kw_norm]
-    keyword = Counter(UNIT_TITLE_RE.match(s.text).group(2) for s in titles).most_common(1)[0][0]
+    titles = [s for s in cands if norm_label(rx.match(s.text).group(grp)) == kw_norm]
+    keyword = Counter(rx.match(s.text).group(grp) for s in titles).most_common(1)[0][0]
     return keyword, titles
 
 
@@ -523,6 +528,8 @@ def detect_schema(doc: PdfDoc, overrides: SchemaOverrides | None = None) -> Prog
         keyword, titles = find_titles_from_example(doc, body, ov.unit_title_example)
     else:
         keyword, titles = find_unit_titles(doc, body)
+    # Programın başlık biçimi: başlıkların çoğu "KELİME N: Ad" ise standart odur (ör. İngilizce "THEME 1: …")
+    kw_first = sum(1 for t in titles if KW_FIRST_RE.match(t.text)) > sum(1 for t in titles if UNIT_TITLE_RE.match(t.text))
     if ov.structure_pages is not None:
         pages = sorted(set(ov.structure_pages))
         heading = None
@@ -572,19 +579,21 @@ def detect_schema(doc: PdfDoc, overrides: SchemaOverrides | None = None) -> Prog
         lo_segment_types=seg_types,
         lo_example=make_field([lo_span]) if lo_span is not None else None,
         data_start_page=data_start,
+        unit_title_kw_first=kw_first,
     )
 
 
-def parse_unit_title(text: str, keyword: str) -> tuple[int, str, bool] | None:
-    """(sıra, ad, standart_biçim). Standart biçim yapı sayfasındaki "N. KELİME: Ad" biçimidir;
-    "KELİME N: Ad" biçimi de birim başlığı sayılır ama standart dışıdır (ör. "TEMA 3: SEYAHAT")."""
+def parse_unit_title(text: str, keyword: str, kw_first: bool = False) -> tuple[int, str, bool] | None:
+    """(sıra, ad, standart_biçim). Standart biçim programın kullandığı biçimdir: çoğunlukla "N. KELİME: Ad";
+    "KELİME N: Ad" biçimi de birim başlığı sayılır ama standart dışıdır (ör. "TEMA 3: SEYAHAT"). Programın
+    başlıkları "KELİME N: Ad" biçimindeyse (kw_first; ör. İngilizce "THEME 1: SCHOOL LIFE") standart odur."""
     t = text.replace("\n", " ")
     m = UNIT_TITLE_RE.match(t)
     if m and norm_label(m.group(2)) == norm_label(keyword):
-        return int(m.group(1)), m.group(3).strip(), True
-    m = re.match(r"^\s*([^\W\d_]+(?:[ \t]+[^\W\d_]+){0,2})\s+(\d+)\s*:\s*(\S.*)$", t, re.S)
+        return int(m.group(1)), m.group(3).strip(), not kw_first
+    m = KW_FIRST_RE.match(t)
     if m and norm_label(m.group(1)) == norm_label(keyword):
-        return int(m.group(2)), m.group(3).strip(), False
+        return int(m.group(2)), m.group(3).strip(), kw_first
     return None
 
 

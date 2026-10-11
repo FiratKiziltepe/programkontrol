@@ -241,6 +241,13 @@ class Locator:
                 if loc.found:
                     loc.title = title
                     return loc
+            # Öğrenme çıktısına ait bulgu (harf sırası, kod kimliği …): ÖÇ'nün kendisi (kod + bileşenler)
+            los = [lo for lo in u.learning_outcomes if lo.code.raw == code or lo.code.normalized == code.rstrip(".")]
+            if los and not d.get("category"):
+                fs = [f for lo in los for f in _fields(lo.header or lo.title) + [c.full or c.text for c in lo.components]]
+                loc = self.fields_loc(title, fs)
+                if loc.found:
+                    return loc
             return self.code_loc(title, [code], pages=u.pages)
         if f.check == "HOURS_MISMATCH" and u is not None:
             from validators import hours_sections

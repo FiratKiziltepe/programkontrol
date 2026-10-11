@@ -46,7 +46,7 @@ from pdf_extract import (
     sub_field,
     tr_upper,
 )
-from schema_detect import _is_unit_title, compound_subset_of, label_lookup, label_prefix_variant, label_variant_of, parse_unit_title
+from schema_detect import _edit_distance, _is_unit_title, compound_subset_of, label_lookup, label_prefix_variant, label_variant_of, parse_unit_title
 
 SUB_ITEM_RE = re.compile(r"^\s*([a-zçğıöşü])\)\s*")
 # Kod tanım girdisi. Standart yazım "E1.1. Merak"; standart dışı yazımlar da tanınır
@@ -208,6 +208,68 @@ def _ends_with_connector(text: str) -> bool:
     return bool(_CONNECTOR_END_RE.search(text.replace("İ", "i").replace("I", "ı")))
 
 
+def _is_sentence_note(text: str) -> bool:
+    """Nokta ile biten, en az dört kelimelik cümle (başlıklar cümle değildir; "2.5." gibi numaralar sayılmaz)."""
+    t = text.strip()
+    return t.endswith(".") and not t[-2:-1].isdigit() and len(re.findall(r"[^\W\d_]{2,}", t)) >= 4
+
+
+_LABEL_CONNECTORS = {"and", "ve", "ile"}
+
+
+def label_word_key(text: str) -> str:
+    """Bağlaç ve tireden bağımsız başlık anahtarı: "Learning and Teaching Practices" ve "Learning-Teaching
+    Practices" -> "learningteachingpractices". Yalnızca eşleştirme içindir; ham metin değişmez."""
+    words = re.findall(r"[^\W_]+", text.replace("İ", "i").replace("I", "ı").lower())
+    return "".join(w for w in words if w not in _LABEL_CONNECTORS).replace("ı", "i")
+
+
+def consolidate_recurring_unknown_labels(units: list[Unit], findings: list[Finding], share: float = 0.8) -> None:
+    """Yapı sayfasında olmayan ama temaların çoğunda (>= share) tekrar eden başlık temanın kalıbındandır (ör. İngilizce
+    "Learning-Teaching Practices"): tema başına UNKNOWN_LABEL yerine programa bir kez LABEL_NOT_IN_STRUCTURE
+    (NEEDS_REVIEW) düşülür. Gruplama bağlaç/tireden bağımsızdır; en sık yazımdan farklı yazılanlar tema bazında
+    LABEL_TEXT_VARIANT (NEEDS_REVIEW) olur. Yalnızca raporlamayı değiştirir; bölümler aynı kalır."""
+    unknown = [f for f in findings if f.check == "UNKNOWN_LABEL" and f.unit_id and f.details.get("text", "").strip()]
+    groups: dict[str, list[Finding]] = {}
+    for f in unknown:
+        k = label_word_key(f.details["text"])
+        # tek harflik yazım hatası ("Leaning-Teaching") en yakın gruba
+        near = next((g for g in groups if len(k) >= 12 and re.sub(r"\D", "", g) == re.sub(r"\D", "", k) and _edit_distance(k, g) <= 2), None) if k not in groups else k
+        groups.setdefault(near or k, []).append(f)
+    need = max(2, -(-int(share * 100) * len(units) // 100))
+    drop: set[int] = set()
+    for fs in groups.values():
+        if len({f.unit_id for f in fs}) < need:
+            continue
+        spelled = Counter(norm_label(f.details["text"]) for f in fs)
+        main = spelled.most_common(1)[0][0]
+        canon = next(f for f in fs if norm_label(f.details["text"]) == main)
+        drop.update(id(f) for f in fs)
+        everywhere = len({f.unit_id for f in fs}) == len(units)
+        findings.append(
+            Finding(
+                # Tüm temalarda geçiyorsa temanın kalıbıdır: yalnızca bilgi (kullanıcı kararı); bazılarında eksikse inceleme
+                severity=Severity.INFO if everywhere else Severity.NEEDS_REVIEW,
+                check="LABEL_NOT_IN_STRUCTURE",
+                unit_id=None,
+                message="Bölüm başlığı yapı sayfasında yok ama temaların çoğunda var (temanın kalıbından sayıldı)",
+                details={"text": canon.details["text"].strip(), "units": len({f.unit_id for f in fs}), "total_units": len(units), "spans": canon.details.get("spans", [])},
+            )
+        )
+        for f in fs:
+            if norm_label(f.details["text"]) != main:
+                findings.append(
+                    Finding(
+                        severity=Severity.NEEDS_REVIEW,
+                        check="LABEL_TEXT_VARIANT",
+                        unit_id=f.unit_id,
+                        message="Bölüm başlığı diğer temalardakinden farklı yazılmış (kaynak PDF)",
+                        details={"text": f.details["text"], "matched_label_norm": main, "spans": f.details.get("spans", [])},
+                    )
+                )
+    findings[:] = [f for f in findings if id(f) not in drop]
+
+
 _CONNECTOR_START_RE = re.compile(r"^\s*(?:ve|ile|veya|ya da)\s", re.I)
 
 
@@ -234,6 +296,12 @@ def _finish_label(spans: list[Span], vocab: list[str], schema: ProgramSchema) ->
     if v is not None:
         # yazım varyantı: öğrenilmiş başlığa eşlenir, ham metin korunur, raporda NEEDS_REVIEW
         return _Label(spans=spans, norm=v, known=True, variant_of=n)
+    # Yalnızca bağlaç/tire farkı ("Learning and Teaching Practices" ~ "Learning-Teaching Practices"): tek aday varsa
+    # o başlığa eşlenir, ham metin korunur, raporda NEEDS_REVIEW
+    wk = label_word_key(text)
+    same = {l.norm for l in schema.labels if wk and label_word_key(l.text) == wk}
+    if len(same) == 1:
+        return _Label(spans=spans, norm=same.pop(), known=True, variant_of=n)
     # Bilinen başlığın "ve …" ile uzatılmış hali ("ÖĞRENME ÇIKTILARI" -> "ÖĞRENME ÇIKTILARI VE SÜREÇ BİLEŞENLERİ"):
     # tek aday varsa o başlığa eşlenir, ham metin korunur, raporda NEEDS_REVIEW (yazım varyantı gibi)
     ext = [v for v in vocab if len(v) >= 8 and n.startswith(v + "ve") and len(n) > len(v) + 2]
@@ -260,16 +328,35 @@ def extract_units(
     ]
     label_spans = [s for s in spans if s.color in schema.label_colors]
     labels = merge_labels(label_spans, schema)
+    # Başlık renginde ama nokta ile biten tam cümle (ör. İngilizce 9-12 her temada "Year 9 is structured based on
+    # inductive approach."): bölüm başlığı değil sayfa notudur; tema dışı bırakılır (Arnavutça sayfa notu gibi)
+    note_ids = {x.id for l in labels if not l.known and _is_sentence_note(" ".join(x.text for x in l.spans)) for x in l.spans}
+    labels = [l for l in labels if l.anchor.id not in note_ids]
     anchor_of: dict[str, _Label] = {l.anchor.id: l for l in labels}
     label_member = {s.id for l in labels for s in l.spans}
 
     raw_units: list[_RawUnit] = []
     excluded: list[tuple[list[Span], list[Span]]] = []  # (başlık, içerik)
     margin_notes: list[Span] = []
-    # Sağa yaslı başlık sütununun sayfadaki sağ kenarı
+    # Başlık iki türlüdür: yan başlık (içerik aynı satırda sağında) ve üst başlık (içerik altında, ör. İngilizce s.42
+    # sayfa genişliğindeki "LEARNING OUTCOMES and PROCESS COMPONENTS"). Başlık sütununun sağ kenarı yalnızca yan
+    # başlıklardan hesaplanır; üst başlığın altındaki satırlar sayfa notu sayılmaz.
+    by_page: dict[int, list[Span]] = {}
+    for s in spans:
+        by_page.setdefault(s.page, []).append(s)
+    top_labels: set[str] = set()
     label_right: dict[int, float] = {}
-    for s in label_spans:
-        label_right[s.page] = max(label_right.get(s.page, s.x1), s.x1)
+    for l in labels:
+        x1 = max(x.x1 for x in l.spans)
+        side = any(
+            o.id not in label_member and o.x0 >= x1 - 2 and any(abs(o.yc - x.yc) < 3 for x in l.spans)
+            for o in by_page.get(l.anchor.page, [])
+        )
+        if not side:
+            top_labels.add(l.anchor.id)
+            continue
+        for x in l.spans:
+            label_right[x.page] = max(label_right.get(x.page, x.x1), x.x1)
     unit: _RawUnit | None = None
     pending_context: list[Span] = []
     outside_heading: list[Span] = []
@@ -304,6 +391,9 @@ def extract_units(
     for row in group_rows(spans):
         row_has_label = any(x.id in label_member for x in row)
         for s in row:
+            if s.id in note_ids:
+                margin_notes.append(s)
+                continue
             if s.color in title_colors:
                 if unit is not None and not unit.sections:
                     if unit.title[-1].page == s.page and abs(unit.title[-1].yc - s.yc) < 3 and not unit.subtitle:
@@ -365,7 +455,8 @@ def extract_units(
                 continue
             if s.color in body_colors or not heading_like(s):
                 # Gövde metni veya içerik içinde renklendirilmiş parça (ör. kırmızı bir nokta)
-                if unit is not None and not row_has_label and s.page in label_right and s.x0 < label_right[s.page] - 20:
+                under_top = bool(unit is not None and unit.sections and unit.sections[-1].label is not None and unit.sections[-1].label.anchor.id in top_labels)
+                if unit is not None and not row_has_label and not under_top and s.page in label_right and s.x0 < label_right[s.page] - 20:
                     # Başlık sütununun sağ kenarının belirgin biçimde solunda (başlık sütununda) başlayan
                     # ve aynı satırda başlık olmayan gövde satırı: sayfa notu (ör. Arnavutça
                     # "5. sınıf öğretim programı bütüncül yaklaşıma göre yapılandırılmıştır.").
@@ -426,6 +517,7 @@ def extract_units(
                 )
             )
     _classify_sections(units, schema, findings)
+    consolidate_recurring_unknown_labels(units, findings)
     by_id = {s.id: s for s in doc.spans}
     for u in units:
         _parse_unit_content(u, schema, findings, by_id)
@@ -481,7 +573,7 @@ def _canonicalize_codes(units: list[Unit]) -> None:
 
 def _build_unit(idx: int, ru: _RawUnit, schema: ProgramSchema, findings: list[Finding]) -> Unit:
     title = make_field(ru.title)
-    parsed = parse_unit_title(title.text, schema.unit_keyword)
+    parsed = parse_unit_title(title.text, schema.unit_keyword, schema.unit_title_kw_first)
     order, name = (parsed[0], parsed[1]) if parsed else (None, None)
     if parsed and not parsed[2]:
         findings.append(
@@ -906,15 +998,31 @@ def _parse_applications(u: Unit, sec: Section, lo_re, loose_re, findings, by_id)
         end = starts[0] if starts else len(rows)
         body = _field_slice(rows, 0, end)
         blocks.append(ApplicationBlock(code=None, header=None, body=body, used_codes=[]))
-        findings.append(
-            Finding(
-                severity=Severity.NEEDS_REVIEW,
-                check="UNATTACHED_APPLICATION_TEXT",
-                unit_id=u.id,
-                message="Öğrenme-öğretme uygulamalarında bir öğrenme çıktısı koduna bağlanamayan metin",
-                details={"text": body.text[:200], "spans": body.source_spans[:10]},
+        first = rows[0].text.strip() if rows else ""
+        letters = [ch for ch in first if ch.isalpha()]
+        titled = len(letters) >= 4 and tr_upper(first) == first  # büyük harfli başlıkla açılan giriş bölümü
+        if starts and titled:
+            # İlk kod bloğundan önce başlıklı giriş bölümü (ör. İngilizce "WARM-UP TO THE WHOLE THEME (WELL-BEING)"):
+            # öğrenme çıktısına bağlı olması beklenmez (kullanıcı kararı); yalnızca bilgi
+            findings.append(
+                Finding(
+                    severity=Severity.INFO,
+                    check="APPLICATION_INTRO_TEXT",
+                    unit_id=u.id,
+                    message="Öğrenme-öğretme uygulamalarının başında öğrenme çıktısı koduna bağlı olmayan giriş metni",
+                    details={"text": body.text[:200], "spans": body.source_spans[:10]},
+                )
             )
-        )
+        else:
+            findings.append(
+                Finding(
+                    severity=Severity.NEEDS_REVIEW,
+                    check="UNATTACHED_APPLICATION_TEXT",
+                    unit_id=u.id,
+                    message="Öğrenme-öğretme uygulamalarında bir öğrenme çıktısı koduna bağlanamayan metin",
+                    details={"text": body.text[:200], "spans": body.source_spans[:10]},
+                )
+            )
     for n, st in enumerate(starts):
         en = starts[n + 1] if n + 1 < len(starts) else len(rows)
         whole = _field_slice(rows, st, en)

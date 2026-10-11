@@ -35,6 +35,7 @@ from schema_detect import NUMBERED_NAME_RE, detect_schema, label_lookup, parse_e
 from unit_extract import extract_units
 
 TR_ALPHABET = "abcçdefgğhıijklmnoöprsştuüvyz"
+EN_ALPHABET = "abcdefghijklmnopqrstuvwxyz"
 
 
 def _f(sev: Severity, check: str, msg: str, unit: Unit | None = None, **details) -> Finding:
@@ -282,7 +283,17 @@ def learn_code_scheme(units: list[Unit], schema: ProgramSchema) -> dict:
         return sum(1 for u in scored if all(lo.code.segments[-1:] == [str(exp[(u.id, i)])] for i, lo in enumerate(u.learning_outcomes, start=1)))
 
     expected_last = per_unit if fits(per_unit) >= fits(per_group) else per_group
-    return {"theme_segment": theme_segment, "expected_last": expected_last}
+    # Süreç bileşeni harf alfabesi programın çoğunluğundan: a,b,c,d (İngilizce) mi a,b,c,ç,d (Türkçe) mi? Yalnızca
+    # iki alfabenin ayrıştığı (4+ harfli) dizilere bakılır; eşitlikte Türk alfabesi (kullanıcı kararı).
+    en = tr = 0
+    for u in scored:
+        for lo in u.learning_outcomes:
+            letters = "".join(c.letter for c in lo.components)
+            if len(letters) >= 4:
+                en += letters == EN_ALPHABET[: len(letters)]
+                tr += letters == TR_ALPHABET[: len(letters)]
+    alphabet = EN_ALPHABET if en > tr else TR_ALPHABET
+    return {"theme_segment": theme_segment, "expected_last": expected_last, "alphabet": alphabet}
 
 
 def check_learning_outcomes(u: Unit, expected: ExpectedRow | None, schema: ProgramSchema, scheme: dict | None = None) -> list[Finding]:
@@ -332,7 +343,7 @@ def check_learning_outcomes(u: Unit, expected: ExpectedRow | None, schema: Progr
             out.append(_f(Severity.FAIL, "LO_CODE_IDENTITY", "Öğrenme çıktısı kodu birimle/sırayla uyuşmuyor", u, code_raw=lo.code.raw, problems=problems, position=i))
         # Süreç bileşeni harfleri
         letters = [c.letter for c in lo.components]
-        expected_letters = list(TR_ALPHABET[: len(letters)])
+        expected_letters = list(scheme.get("alphabet", TR_ALPHABET)[: len(letters)])
         if not letters:
             pass  # süreç bileşeni olmayan öğrenme çıktısı PDF'de geçerlidir (ör. Hayat Bilgisi HB.1.1.1); bulgu değil
         elif letters == [""]:

@@ -137,3 +137,25 @@ def test_rotated_repeated_text_is_furniture():
     rotated = {s.id for s in spans[:5]}
     furn = detect_furniture(spans, {p: (595, 842) for p in range(1, 6)}, 5, rotated)
     assert rotated <= furn and "P1_S2" not in furn
+
+
+def test_label_word_key_ignores_connectors_and_hyphens():
+    from unit_extract import label_word_key
+
+    k = label_word_key("Learning-Teaching Practices")
+    assert k == label_word_key("Learning and Teaching Practices") == label_word_key("Learning And Teaching Practices")
+    assert label_word_key("Öğrenme-Öğretme Uygulamaları") == label_word_key("Öğrenme ve Öğretme Uygulamaları")
+
+
+def test_recurring_unknown_label_reported_once():
+    from models import Finding, Severity, TextField, Unit
+    from unit_extract import consolidate_recurring_unknown_labels
+
+    tf = TextField(text="T", pages=[1], source_spans=[], compare_key="t")
+    units = [Unit(id=f"U{i:02d}", context=None, title=tf, order=i, name=None, pages=[i]) for i in range(1, 6)]
+    texts = ["Learning-Teaching Practices"] * 4 + ["Leaning-Teaching Practices"]
+    fs = [Finding(severity=Severity.NEEDS_REVIEW, check="UNKNOWN_LABEL", unit_id=u.id, message="", details={"text": t, "spans": []}) for u, t in zip(units, texts)]
+    consolidate_recurring_unknown_labels(units, fs)
+    assert [f.check for f in fs if f.check == "LABEL_NOT_IN_STRUCTURE"] == ["LABEL_NOT_IN_STRUCTURE"]
+    assert [f.unit_id for f in fs if f.check == "LABEL_TEXT_VARIANT"] == ["U05"]
+    assert not [f for f in fs if f.check == "UNKNOWN_LABEL"]

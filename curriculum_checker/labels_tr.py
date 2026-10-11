@@ -44,6 +44,7 @@ CHECK_TR = {
     "SECTION_LEAKAGE": "Bölüm içinde başka bölüm başlığı",
     "EMPTY_SECTION": "Bölüm boş",
     "UNKNOWN_LABEL": "Yapı sayfasında olmayan başlık",
+    "LABEL_NOT_IN_STRUCTURE": "Temalarda tekrar eden, yapı sayfasında olmayan başlık",
     "LABEL_TEXT_VARIANT": "Bölüm başlığı farklı yazılmış",
     "ORPHAN_LABEL": "Tema dışında bölüm başlığı",
     "GROUP_HAS_CONTENT": "Üst başlığın altında içerik var",
@@ -65,6 +66,7 @@ CHECK_TR = {
     "APPLICATION_EMPTY": "Uygulama bloğu boş",
     "APPLICATION_ORDER": "Uygulama sırası ÖÇ sırasından farklı",
     "UNATTACHED_APPLICATION_TEXT": "Uygulamada ÖÇ'ye bağlanamayan metin",
+    "APPLICATION_INTRO_TEXT": "Uygulamaların başında giriş metni",
     # kod çapraz kontrolü
     "USED_NOT_DECLARED": "Tanımlanmamış kod kullanılmış",
     "DECLARED_NOT_USED": "Tanımlanmış kod kullanılmamış",
@@ -116,6 +118,9 @@ DETAIL_TR = {
     "entry": "Tanım girdisi",
     "error": "Hata",
     "lo_prefix": "ÖÇ kodu öneki",
+    "units": "Geçtiği tema sayısı",
+    "total_units": "Toplam tema",
+    "alphabet": "Alfabe",
 }
 SKIP_DETAILS = {"spans", "label_spans", "matched_label_norm"}
 
